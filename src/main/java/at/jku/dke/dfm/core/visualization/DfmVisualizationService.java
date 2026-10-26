@@ -1,17 +1,13 @@
 package at.jku.dke.dfm.core.visualization;
 
+import at.jku.dke.dfm.core.graph.DfmGraphBuilder;
+import at.jku.dke.dfm.core.graph.NodeKind;
 import at.jku.dke.dfm.core.models.ast.AbstractElement;
-import at.jku.dke.dfm.core.models.ast.DimensionElement;
-import at.jku.dke.dfm.core.models.ast.FactElement;
-import at.jku.dke.dfm.core.models.ast.Hierarchy;
-import at.jku.dke.dfm.core.models.ast.Level;
 import at.jku.dke.dfm.core.models.enums.ConnectionType;
-import at.jku.dke.dfm.core.models.enums.LevelType;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Creates a graph-style SVG overview of a parsed DFM.
@@ -51,92 +47,29 @@ public class DfmVisualizationService {
     }
 
     private Graph createGraph(List<AbstractElement> elements) {
+        var model = new DfmGraphBuilder().build(elements);
         var nodes = new ArrayList<Node>();
-        var nodeByName = new HashMap<String, Node>();
+        var nodeById = new HashMap<String, Node>();
+        for (var graphNode : model.nodes()) {
+            var node = new Node(graphNode.label(), toNodeType(graphNode.kind()), graphNode.optional());
+            node.measures.addAll(graphNode.details());
+            nodes.add(node);
+            nodeById.put(graphNode.id(), node);
+        }
         var links = new ArrayList<Link>();
-        var facts = new ArrayList<FactElement>();
-        var dimensions = new ArrayList<DimensionElement>();
-
-        for (var element : elements) {
-            if (element instanceof FactElement fact) {
-                facts.add(fact);
-                var factNode = addNode(nodeByName, nodes, fact.getName(), NodeType.FACT, false);
-                factNode.measures.addAll(fact.getMeasures());
-                factNode.descriptives.addAll(fact.getDescriptives());
-                for (var descriptive : fact.getDescriptives()) {
-                    addNode(nodeByName, nodes, descriptive, NodeType.DESCRIPTIVE, false);
-                }
-                dimensions.addAll(fact.getDimensions());
-            } else if (element instanceof DimensionElement dimension) {
-                dimensions.add(dimension);
-            }
-        }
-
-        for (var dimension : dimensions) {
-            for (var hierarchy : dimension.getHierarchies()) {
-                Level current = hierarchy.getHead();
-                while (current != null) {
-                    addNode(nodeByName, nodes, current.getName(),
-                        current.getLevelType() == LevelType.DESCRIPTIVE
-                            ? NodeType.DESCRIPTIVE : NodeType.LEVEL, current.isOptional());
-                    current = current.getNextLevel();
-                }
-            }
-        }
-
-        for (var fact : facts) {
-            for (var descriptive : fact.getDescriptives()) {
-                addLink(links, nodeByName, fact.getName(), descriptive, ConnectionType.SIMPLE, false);
-            }
-            for (var dimension : fact.getDimensions()) {
-                for (var hierarchy : dimension.getHierarchies()) {
-                    if (hierarchy.getHead() != null) {
-                        addLink(links, nodeByName, fact.getName(), hierarchy.getHead().getName(),
-                            ConnectionType.SIMPLE, false);
-                    }
-                }
-            }
-        }
-
-        for (var dimension : dimensions) {
-            for (var hierarchy : dimension.getHierarchies()) {
-                Level current = hierarchy.getHead();
-                while (current != null && current.getNextLevel() != null) {
-                    addLink(links, nodeByName, current.getName(), current.getNextLevel().getName(),
-                        current.getConnectionType(), current.isConnectionOptional());
-                    current = current.getNextLevel();
-                }
-            }
+        for (var edge : model.edges()) {
+            links.add(new Link(nodeById.get(edge.source()), nodeById.get(edge.target()),
+                edge.connectionType(), edge.optional()));
         }
         return new Graph(nodes, links);
     }
 
-    private Node addNode(Map<String, Node> nodeByName, List<Node> nodes,
-                         String name, NodeType type, boolean optional) {
-        var existing = nodeByName.get(name);
-        if (existing != null) {
-            return existing;
-        }
-        var node = new Node(name, type, optional);
-        nodeByName.put(name, node);
-        nodes.add(node);
-        return node;
-    }
-
-    private void addLink(List<Link> links, Map<String, Node> nodeByName,
-                         String source, String target, ConnectionType connectionType, boolean optional) {
-        var sourceNode = nodeByName.get(source);
-        var targetNode = nodeByName.get(target);
-        if (sourceNode == null || targetNode == null || sourceNode == targetNode) {
-            return;
-        }
-        for (var link : links) {
-            if (link.source() == sourceNode && link.target() == targetNode) {
-                return;
-            }
-        }
-        links.add(new Link(sourceNode, targetNode,
-            connectionType == null ? ConnectionType.SIMPLE : connectionType, optional));
+    private NodeType toNodeType(NodeKind kind) {
+        return switch (kind) {
+            case FACT -> NodeType.FACT;
+            case LEVEL -> NodeType.LEVEL;
+            case DESCRIPTIVE -> NodeType.DESCRIPTIVE;
+        };
     }
 
     private void layout(List<Node> nodes, List<Link> links) {
@@ -336,7 +269,6 @@ public class DfmVisualizationService {
         private final NodeType type;
         private final boolean optional;
         private final List<String> measures = new ArrayList<>();
-        private final List<String> descriptives = new ArrayList<>();
         private double x;
         private double y;
 
