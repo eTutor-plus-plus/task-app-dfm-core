@@ -5,7 +5,7 @@ import java.util.List;
 /**
  * A node of a {@link DfmGraph}.
  *
- * @param id       The unique node id. Elements with the same name share one node, so the id equals the name.
+ * @param id       The unique node id within the graph.
  * @param label    The text to display.
  * @param kind     The node kind.
  * @param optional Whether the level is optional.

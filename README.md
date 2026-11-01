@@ -64,7 +64,7 @@ Invalid input results in a `DfmParseException` carrying the 1-based `getLine()` 
 
 ## Graph model and rendering
 
-`DfmGraphBuilder` turns the parsed elements into a layout-independent `DfmGraph` (nodes and edges). Elements with the same name share one node, and a fact is connected to the head of the first hierarchy of each of its dimensions.
+`DfmGraphBuilder` turns the parsed elements into a layout-independent `DfmGraph` (nodes and edges). Same-named levels share a node within one dimension, but remain separate across dimensions. A fact is connected to the head of the first hierarchy of each of its dimensions.
 
 ```java
 var graph = new DfmGraphBuilder().build(elements);

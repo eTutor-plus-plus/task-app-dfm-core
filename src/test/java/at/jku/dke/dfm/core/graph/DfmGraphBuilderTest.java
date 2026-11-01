@@ -9,6 +9,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 class DfmGraphBuilderTest {
     private static DfmGraph build(String source) {
@@ -16,20 +17,24 @@ class DfmGraphBuilderTest {
     }
 
     private static GraphEdge edge(DfmGraph graph, String source, String target) {
+        var labelsById = graph.nodes().stream()
+            .collect(java.util.stream.Collectors.toMap(GraphNode::id, GraphNode::label));
         return graph.edges().stream()
-            .filter(edge -> edge.source().equals(source) && edge.target().equals(target))
+            .filter(edge -> source.equals(labelsById.get(edge.source()))
+                && target.equals(labelsById.get(edge.target())))
             .findFirst().orElse(null);
     }
 
-    private static GraphNode node(DfmGraph graph, String id) {
-        return graph.nodes().stream().filter(node -> node.id().equals(id)).findFirst().orElse(null);
+    private static GraphNode node(DfmGraph graph, String label) {
+        return graph.nodes().stream().filter(node -> node.label().equals(label)).findFirst().orElse(null);
     }
 
     @Test
     void buildsNodesAndEdgesForFactWithDimension() {
         var graph = build("fact Sales { profit; {descriptive} clerk; }; dimension Time { day - month; }; Sales - Time;");
 
-        assertEquals(List.of("Sales", "clerk", "day", "month"), graph.nodes().stream().map(GraphNode::id).toList());
+        assertEquals(List.of("Sales", "clerk", "day", "month"),
+            graph.nodes().stream().map(GraphNode::label).toList());
         assertEquals(NodeKind.FACT, node(graph, "Sales").kind());
         assertEquals(List.of("profit"), node(graph, "Sales").details());
         assertEquals(NodeKind.DESCRIPTIVE, node(graph, "clerk").kind());
@@ -53,8 +58,9 @@ class DfmGraphBuilderTest {
     void sharesNodesWithSameNameAcrossHierarchies() {
         var graph = build("fact Sales { profit; }; dimension D { a - b - c; a - d; }; Sales - D;");
 
-        assertEquals(1, graph.nodes().stream().filter(node -> node.id().equals("a")).count());
-        assertEquals(List.of("Sales", "a", "b", "c", "d"), graph.nodes().stream().map(GraphNode::id).toList());
+        assertEquals(1, graph.nodes().stream().filter(node -> node.label().equals("a")).count());
+        assertEquals(List.of("Sales", "a", "b", "c", "d"),
+            graph.nodes().stream().map(GraphNode::label).toList());
         assertTrue(edge(graph, "a", "b") != null);
         assertTrue(edge(graph, "a", "d") != null);
     }
@@ -83,7 +89,7 @@ class DfmGraphBuilderTest {
     void includesUnconnectedDimensionsWithoutFactEdges() {
         var graph = build("fact Sales { profit; }; dimension D { a - b; };");
 
-        assertEquals(List.of("Sales", "a", "b"), graph.nodes().stream().map(GraphNode::id).toList());
+        assertEquals(List.of("Sales", "a", "b"), graph.nodes().stream().map(GraphNode::label).toList());
         assertEquals(1, graph.edges().size());
     }
 
@@ -91,9 +97,39 @@ class DfmGraphBuilderTest {
     void buildsGraphForMultipleFacts() {
         var graph = build("fact A { m1; }; fact B { m2; }; dimension D1 { x - y; }; dimension D2 { p - q; }; A - D1; B - D2;");
 
-        assertEquals(List.of("A", "B", "x", "y", "p", "q"), graph.nodes().stream().map(GraphNode::id).toList());
+        assertEquals(List.of("A", "B", "x", "y", "p", "q"),
+            graph.nodes().stream().map(GraphNode::label).toList());
         assertTrue(edge(graph, "A", "x") != null);
         assertTrue(edge(graph, "B", "p") != null);
+    }
+
+    @Test
+    void keepsSameNamedLevelsSeparateAcrossDimensionsAndRetainsBothConnectionTypes() {
+        var graph = build("""
+            fact Purchase { quantity; };
+            dimension Payment { paymentDateTime - day - month - year; };
+            dimension PurchaseDateTime {
+                purchaseDateTime - day - month -> year;
+                purchaseDateTime - day - calendarWeek -> year;
+            };
+            Purchase - Payment;
+            Purchase - PurchaseDateTime;
+            """);
+
+        var labelsById = graph.nodes().stream()
+            .collect(java.util.stream.Collectors.toMap(GraphNode::id, GraphNode::label));
+        var monthToYear = graph.edges().stream()
+            .filter(edge -> "month".equals(labelsById.get(edge.source()))
+                && "year".equals(labelsById.get(edge.target())))
+            .toList();
+
+        assertEquals(2, monthToYear.size());
+        assertEquals(1, monthToYear.stream()
+            .filter(edge -> edge.connectionType() == ConnectionType.SIMPLE).count());
+        assertEquals(1, monthToYear.stream()
+            .filter(edge -> edge.connectionType() == ConnectionType.CONVERGENCE).count());
+        assertNotEquals(monthToYear.get(0).source(), monthToYear.get(1).source());
+        assertNotEquals(monthToYear.get(0).target(), monthToYear.get(1).target());
     }
 
     @Test
