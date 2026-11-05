@@ -9,6 +9,11 @@ import at.jku.dke.dfm.core.models.enums.ConnectionType;
  * @param target         The id of the target node.
  * @param connectionType The connection type.
  * @param optional       Whether the connection is optional.
+ * @param label          The description of the connection, or {@code null} if it has none.
  */
-public record GraphEdge(String source, String target, ConnectionType connectionType, boolean optional) {
+public record GraphEdge(String source, String target, ConnectionType connectionType, boolean optional,
+                        String label) {
+    public GraphEdge(String source, String target, ConnectionType connectionType, boolean optional) {
+        this(source, target, connectionType, optional, null);
+    }
 }

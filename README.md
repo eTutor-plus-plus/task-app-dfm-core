@@ -37,7 +37,7 @@ A model is a sequence of declarations, each terminated by `;`. Keywords (`fact`,
 |---|---|---|
 | Fact | `fact Name { measure; {descriptive} descriptive; ... };` | `fact Sales { profit; {descriptive} clerk; };` |
 | Dimension | `dimension Name { hierarchy; hierarchy; ... };` | `dimension Time { day - month; day - week; };` |
-| Fact-dimension connection | `Fact - Dimension;` | `Sales - Time;` |
+| Fact-dimension connection | `Fact - Dimension;` or `Fact -[text]- Dimension;` | `Sales -[soldat]- Time;` |
 
 Within a hierarchy, levels are chained with connections:
 
@@ -49,6 +49,9 @@ Within a hierarchy, levels are chained with connections:
 | `(a)` | optional level |
 | `a (-) b` | optional connection (also `(=)`, `(->)`) |
 | `{descriptive} d` | descriptive level |
+| `a -[text]- b` | connection with a description (also `=[text]=` and `-[text]->`; `a (-[text]-) b` if optional) |
+
+The description is a single name (letters, digits, `_`). The opening and closing connector must belong together: `-…-`, `=…=` or `-…->` between levels, and only `-…-` for fact-dimension connections. The description is drawn at the edge (for a fact-dimension connection at the edge from the fact to the first level of the dimension) and is compared like any other part of the model, so `a -[x]- b`, `a -[y]- b` and `a - b` are different.
 
 Dimensions that are not connected to a fact are kept as separate top-level elements.
 

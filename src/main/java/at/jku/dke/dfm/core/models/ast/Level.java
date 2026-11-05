@@ -3,6 +3,8 @@ package at.jku.dke.dfm.core.models.ast;
 import at.jku.dke.dfm.core.models.enums.ConnectionType;
 import at.jku.dke.dfm.core.models.enums.LevelType;
 
+import java.util.Objects;
+
 /**
  * A level in a hierarchy.
  */
@@ -11,6 +13,7 @@ public class Level {
     private boolean optional;
     private ConnectionType connectionType;
     private boolean connectionOptional;
+    private String connectionLabel;
     private Level nextLevel;
     private LevelType levelType = LevelType.LEVEL;
 
@@ -47,6 +50,17 @@ public class Level {
         this.connectionOptional = connectionOptional;
     }
 
+    /**
+     * The description of the connection to the next level, or {@code null} if the connection has none.
+     */
+    public String getConnectionLabel() {
+        return connectionLabel;
+    }
+
+    public void setConnectionLabel(String connectionLabel) {
+        this.connectionLabel = connectionLabel;
+    }
+
     public Level getNextLevel() {
         return nextLevel;
     }
@@ -68,6 +82,7 @@ public class Level {
             || optional != other.optional
             || connectionType != other.connectionType
             || connectionOptional != other.connectionOptional
+            || !Objects.equals(connectionLabel, other.connectionLabel)
             || levelType != other.levelType) {
             return false;
         }

@@ -202,6 +202,112 @@ class DfmParserTest {
     }
 
     @Test
+    void parsesConnectionLabels() {
+        var elements = new DfmParser().parse(
+            "dimension D { customer -[customercity]- city =[x]= region -[in]-> country (-[opt]-) zone; };");
+
+        var customer = ((DimensionElement) elements.get(0)).getHierarchies().get(0).getHead();
+        var city = customer.getNextLevel();
+        var region = city.getNextLevel();
+        var country = region.getNextLevel();
+        assertEquals("customercity", customer.getConnectionLabel());
+        assertEquals(ConnectionType.SIMPLE, customer.getConnectionType());
+        assertEquals("x", city.getConnectionLabel());
+        assertEquals(ConnectionType.MULTIPLE, city.getConnectionType());
+        assertEquals("in", region.getConnectionLabel());
+        assertEquals(ConnectionType.CONVERGENCE, region.getConnectionType());
+        assertEquals("opt", country.getConnectionLabel());
+        assertTrue(country.isConnectionOptional());
+        assertNull(country.getNextLevel().getConnectionLabel());
+    }
+
+    @Test
+    void connectionsWithoutLabelHaveNoLabel() {
+        var elements = new DfmParser().parse("dimension D { a - b; };");
+
+        assertNull(((DimensionElement) elements.get(0)).getHierarchies().get(0).getHead().getConnectionLabel());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "dimension D { a -[x]= b; };",
+        "dimension D { a =[x]- b; };",
+        "dimension D { a =[x]-> b; };",
+        "dimension D { a ->[x]- b; };",
+        "dimension D { a -[]- b; };",
+        "dimension D { a -[x y]- b; };",
+        "dimension D { a -[x - b; };",
+        "dimension D { a -[x]; };",
+        "dimension D { a -[x]",
+        "dimension D { a -[x",
+        "dimension D { a -[",
+        "dimension D { a (-[x]) b; };",
+        "dimension D { a [x] b; };"
+    })
+    void rejectsMalformedConnectionLabels(String source) {
+        var exception = assertThrows(DfmParseException.class, () -> new DfmParser().parse(source));
+
+        assertTrue(exception.getLine() >= 1);
+        assertTrue(exception.getColumn() >= 1);
+    }
+
+    @Test
+    void connectionLabelsAreCaseSensitiveInStructuralComparison() {
+        var parser = new DfmParser();
+        var labeled = parser.parse("dimension D { a -[x]- b; };").get(0);
+
+        assertTrue(labeled.structurallyEquals(parser.parse("dimension D { a -[x]- b; };").get(0)));
+        assertFalse(labeled.structurallyEquals(parser.parse("dimension D { a -[X]- b; };").get(0)));
+        assertFalse(labeled.structurallyEquals(parser.parse("dimension D { a -[y]- b; };").get(0)));
+        assertFalse(labeled.structurallyEquals(parser.parse("dimension D { a - b; };").get(0)));
+    }
+
+    @Test
+    void parsesFactDimensionConnectionLabels() {
+        var elements = new DfmParser().parse("""
+            fact Sales { profit; };
+            dimension Time { day; };
+            dimension Shop { shop; };
+            Sales -[soldat]- Time;
+            Sales - Shop;
+            """);
+
+        var fact = (FactElement) elements.get(0);
+        assertEquals("soldat", fact.getDimensions().get(0).getFactConnectionLabel());
+        assertNull(fact.getDimensions().get(1).getFactConnectionLabel());
+    }
+
+    @Test
+    void factDimensionConnectionLabelsAreCompared() {
+        var parser = new DfmParser();
+        var base = "fact S { m; }; dimension T { d; }; ";
+        var labeled = parser.parse(base + "S -[x]- T;").get(0);
+
+        assertTrue(labeled.structurallyEquals(parser.parse(base + "S -[x]- T;").get(0)));
+        assertFalse(labeled.structurallyEquals(parser.parse(base + "S -[y]- T;").get(0)));
+        assertFalse(labeled.structurallyEquals(parser.parse(base + "S - T;").get(0)));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "fact S { m; }; dimension T { d; }; S -[x]-> T;",
+        "fact S { m; }; dimension T { d; }; S -[x]= T;",
+        "fact S { m; }; dimension T { d; }; S =[x]= T;",
+        "fact S { m; }; dimension T { d; }; S -[]- T;",
+        "fact S { m; }; dimension T { d; }; S -[x y]- T;",
+        "fact S { m; }; dimension T { d; }; S -[x] T;",
+        "fact S { m; }; dimension T { d; }; S -[x]-",
+        "fact S { m; }; dimension T { d; }; S -[x",
+        "fact S { m; }; dimension T { d; }; S -["
+    })
+    void rejectsMalformedFactDimensionConnectionLabels(String source) {
+        var exception = assertThrows(DfmParseException.class, () -> new DfmParser().parse(source));
+
+        assertTrue(exception.getLine() >= 1);
+        assertTrue(exception.getColumn() >= 1);
+    }
+
+    @Test
     void sharedInstanceIsSafeForConcurrentUse() throws Exception {
         var parser = new DfmParser();
         var sources = List.of(

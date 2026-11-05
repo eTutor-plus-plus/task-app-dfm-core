@@ -71,7 +71,8 @@ public class DfmGraphBuilder {
                 var hierarchies = dimension.element().getHierarchies();
                 if (!hierarchies.isEmpty() && hierarchies.get(0).getHead() != null) {
                     addEdge(edges, nodes, factData.id(),
-                        levelId(dimension, hierarchies.get(0).getHead().getName()), ConnectionType.SIMPLE, false);
+                        levelId(dimension, hierarchies.get(0).getHead().getName()), ConnectionType.SIMPLE, false,
+                        dimension.element().getFactConnectionLabel());
                 }
             }
         }
@@ -82,7 +83,7 @@ public class DfmGraphBuilder {
                      level = level.getNextLevel()) {
                     addEdge(edges, nodes, levelId(dimension, level.getName()),
                         levelId(dimension, level.getNextLevel().getName()),
-                        level.getConnectionType(), level.isConnectionOptional());
+                        level.getConnectionType(), level.isConnectionOptional(), level.getConnectionLabel());
                 }
             }
         }
@@ -103,6 +104,11 @@ public class DfmGraphBuilder {
 
     private void addEdge(List<GraphEdge> edges, Map<String, GraphNode> nodes, String source, String target,
                          ConnectionType connectionType, boolean optional) {
+        addEdge(edges, nodes, source, target, connectionType, optional, null);
+    }
+
+    private void addEdge(List<GraphEdge> edges, Map<String, GraphNode> nodes, String source, String target,
+                         ConnectionType connectionType, boolean optional, String label) {
         if (!nodes.containsKey(source) || !nodes.containsKey(target) || source.equals(target)) {
             return;
         }
@@ -112,7 +118,7 @@ public class DfmGraphBuilder {
             }
         }
         edges.add(new GraphEdge(source, target, connectionType == null ? ConnectionType.SIMPLE : connectionType,
-            optional));
+            optional, label));
     }
 
     private record FactData(FactElement element, String id, List<DimensionData> dimensions) {

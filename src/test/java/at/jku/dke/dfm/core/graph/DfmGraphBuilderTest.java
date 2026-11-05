@@ -46,6 +46,23 @@ class DfmGraphBuilderTest {
     }
 
     @Test
+    void carriesConnectionLabelsToEdges() {
+        var graph = build("dimension D { a -[ab]- b - c; }; fact F { m; }; F - D;");
+
+        assertEquals("ab", edge(graph, "a", "b").label());
+        assertEquals(null, edge(graph, "b", "c").label());
+        assertEquals(null, edge(graph, "F", "a").label());
+    }
+
+    @Test
+    void carriesFactDimensionConnectionLabelToEdgeToFirstLevel() {
+        var graph = build("fact F { m; }; dimension D { a - b; }; F -[uses]- D;");
+
+        assertEquals("uses", edge(graph, "F", "a").label());
+        assertEquals(null, edge(graph, "a", "b").label());
+    }
+
+    @Test
     void connectsFactOnlyToHeadOfFirstHierarchy() {
         var graph = build("fact Sales { profit; }; dimension D { a - b; c - d; }; Sales - D;");
 

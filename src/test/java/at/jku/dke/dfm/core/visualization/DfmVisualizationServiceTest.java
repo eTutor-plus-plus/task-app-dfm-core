@@ -36,6 +36,115 @@ class DfmVisualizationServiceTest {
     }
 
     @Test
+    void rendersConnectionLabelsAsEdgeText() {
+        var svg = render("fact Sales { profit; }; dimension D { a -[a_to_b]- b; }; Sales - D;");
+
+        assertTrue(svg.contains("class=\"edge-label\""));
+        assertTrue(svg.contains(">a_to_b</text>"));
+    }
+
+    @Test
+    void edgeLabelLiesOnTheEdgeButKeepsItsMiddleFree() {
+        var pattern = java.util.regex.Pattern.compile("<circle cx=\"([\\d.\\-]+)\" cy=\"([\\d.\\-]+)\"");
+        for (var source : List.of(
+            "fact S { m; }; dimension D { a (-[longerlabel]-) b; }; S - D;",
+            "fact S { m; }; dimension D { a (-[x]-) b; a - c; a - d; a - e; }; S - D;",
+            "fact S { m; }; dimension D { a (-[described_connection]-) b - c - d; }; S - D;")) {
+            var svg = render(source);
+            var circles = pattern.matcher(svg).results()
+                .map(match -> new double[]{Double.parseDouble(match.group(1)), Double.parseDouble(match.group(2))})
+                .toList();
+            var text = java.util.regex.Pattern.compile(
+                "class=\"edge-label\" text-anchor=\"middle\" x=\"([\\d.\\-]+)\" y=\"([\\d.\\-]+)\">([^<]*)<")
+                .matcher(svg);
+            assertTrue(text.find());
+            double labelX = Double.parseDouble(text.group(1));
+            double labelY = Double.parseDouble(text.group(2)) - 4;
+            double halfWidth = text.group(3).length() * 7 / 2;
+            var from = circles.get(0);
+            var to = circles.get(1);
+            double length = Math.hypot(to[0] - from[0], to[1] - from[1]);
+            double normalX = -(to[1] - from[1]) / length;
+            double normalY = (to[0] - from[0]) / length;
+            double middleX = (from[0] + to[0]) / 2;
+            double middleY = (from[1] + to[1]) / 2;
+
+            for (int i = -5; i <= 5; i++) {
+                assertFalse(insideLabel(middleX + normalX * i, middleY + normalY * i, labelX, labelY, halfWidth),
+                    source);
+            }
+            assertFalse(insideLabel(middleX, middleY, labelX, labelY, halfWidth), source);
+            double distanceToLine = Math.abs((labelX - from[0]) * normalX + (labelY - from[1]) * normalY);
+            boolean onEdge = distanceToLine < 1;
+            if (!onEdge) {
+                // too short for the label: it has to stay clear of the whole edge
+                for (int i = 0; i <= 100; i++) {
+                    double t = i / 100.0;
+                    assertFalse(insideLabel(from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t,
+                        labelX, labelY, halfWidth), source);
+                }
+            }
+            if (source.contains("longerlabel")) {
+                assertTrue(onEdge, source + " label is not on the edge: " + distanceToLine);
+            }
+        }
+    }
+
+    private static boolean insideLabel(double x, double y, double labelX, double labelY, double halfWidth) {
+        return Math.abs(x - labelX) <= halfWidth && Math.abs(y - labelY) <= 7;
+    }
+
+    @Test
+    void edgeLabelIsCenteredOnPlainEdges() {
+        var circles = java.util.regex.Pattern.compile("<circle cx=\"([\\d.\\-]+)\" cy=\"([\\d.\\-]+)\"")
+            .matcher(render("fact S { m; }; dimension D { a -[plain]- b; }; S - D;"))
+            .results().map(match -> new double[]{Double.parseDouble(match.group(1)),
+                Double.parseDouble(match.group(2))}).toList();
+        var svg = render("fact S { m; }; dimension D { a -[plain]- b; }; S - D;");
+        var text = java.util.regex.Pattern.compile(
+            "class=\"edge-label\" text-anchor=\"middle\" x=\"([\\d.\\-]+)\" y=\"([\\d.\\-]+)\"").matcher(svg);
+        assertTrue(text.find());
+
+        assertEquals((circles.get(0)[0] + circles.get(1)[0]) / 2, Double.parseDouble(text.group(1)), 0.2);
+        assertEquals((circles.get(0)[1] + circles.get(1)[1]) / 2 + 4, Double.parseDouble(text.group(2)), 0.2);
+    }
+
+    @Test
+    void factEdgeLabelStaysOutsideTheFactBox() {
+        var svg = render("fact S { m; }; dimension D { a - b; }; S -[uses]- D;");
+        var box = java.util.regex.Pattern.compile(
+            "<rect x=\"([\\d.\\-]+)\" y=\"([\\d.\\-]+)\" width=\"([\\d.\\-]+)\" height=\"([\\d.\\-]+)\"").matcher(svg);
+        var text = java.util.regex.Pattern.compile(
+            "class=\"edge-label\" text-anchor=\"middle\" x=\"([\\d.\\-]+)\" y=\"([\\d.\\-]+)\"").matcher(svg);
+        assertTrue(box.find());
+        assertTrue(text.find());
+
+        double x = Double.parseDouble(text.group(1));
+        double y = Double.parseDouble(text.group(2)) - 4;
+        double halfWidth = "uses".length() * 7 / 2.0;
+        double left = Double.parseDouble(box.group(1));
+        double top = Double.parseDouble(box.group(2));
+        double right = left + Double.parseDouble(box.group(3));
+        double bottom = top + Double.parseDouble(box.group(4));
+        boolean overlaps = x + halfWidth > left && x - halfWidth < right && y + 7 > top && y - 7 < bottom;
+        assertFalse(overlaps);
+    }
+
+    @Test
+    void shortEdgesPlaceTheLabelBesideTheEdge() {
+        var svg = render("fact S { m; }; dimension D { a (-[a_rather_long_description_text]-) b; }; S - D;");
+
+        assertTrue(svg.contains(">a_rather_long_description_text</text>"));
+    }
+
+    @Test
+    void rendersNoEdgeLabelsWithoutDescriptions() {
+        var svg = render("fact Sales { profit; }; dimension D { a - b; }; Sales - D;");
+
+        assertFalse(svg.contains("class=\"edge-label\" "));
+    }
+
+    @Test
     void rendersConvergenceWithArrowMarker() {
         var svg = render("fact Sales { profit; }; dimension D { a -> b; }; Sales - D;");
 

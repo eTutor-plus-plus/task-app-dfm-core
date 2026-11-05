@@ -22,6 +22,8 @@ public class DfmVisualizationService {
     private static final double DESCRIPTIVE_HEIGHT = 20;
     private static final double LINK_DISTANCE = 220;
     private static final double COLLISION_PADDING = 24;
+    private static final double LABEL_MARGIN = 9;
+    private static final double LABEL_HALF_HEIGHT = 7;
 
     public String render(List<AbstractElement> elements) {
         var graph = createGraph(elements);
@@ -32,7 +34,8 @@ public class DfmVisualizationService {
             .append("\" viewBox=\"0 0 ").append(WIDTH).append(" ").append(HEIGHT).append("\">")
             .append("<style>text{font:16px serif}.fact-title{font-weight:bold;fill:#00e}")
             .append(".fact-detail{fill:#666;font-size:14px}.descriptive{fill:#000}")
-            .append(".edge{stroke:#999;stroke-width:1;fill:none}</style>")
+            .append(".edge{stroke:#999;stroke-width:1;fill:none}")
+            .append(".edge-label{font-size:13px;fill:#333;stroke:#fff;stroke-width:3px;paint-order:stroke}</style>")
             .append("<defs><marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"8\" refY=\"5\"")
             .append(" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto-start-reverse\">")
             .append("<path d=\"M 0 0 L 10 5 L 0 10 z\" fill=\"#222\"/></marker></defs>");
@@ -59,7 +62,7 @@ public class DfmVisualizationService {
         var links = new ArrayList<Link>();
         for (var edge : model.edges()) {
             links.add(new Link(nodeById.get(edge.source()), nodeById.get(edge.target()),
-                edge.connectionType(), edge.optional()));
+                edge.connectionType(), edge.optional(), edge.label()));
         }
         return new Graph(nodes, links);
     }
@@ -184,6 +187,69 @@ public class DfmVisualizationService {
             appendLine(svg, middleX - perpendicularX, middleY - perpendicularY,
                 middleX + perpendicularX, middleY + perpendicularY, false);
         }
+        if (link.label() != null) {
+            appendLinkLabel(svg, link, dx, dy, distance);
+        }
+    }
+
+    private void appendLinkLabel(StringBuilder svg, Link link, double dx, double dy, double distance) {
+        double halfWidth = link.label().length() * 7 / 2;
+        double unitX = dx / distance;
+        double unitY = dy / distance;
+
+        // the label belongs to the visible part of the edge, i.e. the part between the node borders
+        double startClip = borderDistance(link.source(), unitX, unitY);
+        double endClip = borderDistance(link.target(), -unitX, -unitY);
+        double visible = distance - startClip - endClip;
+        double middleX = (link.source().x + link.target().x) / 2 + unitX * (startClip - endClip) / 2;
+        double middleY = (link.source().y + link.target().y) / 2 + unitY * (startClip - endClip) / 2;
+
+        // node names hang below the nodes, so a shifted label is moved towards the lower node
+        double directionX = unitY < 0 ? -unitX : unitX;
+        double directionY = Math.abs(unitY);
+        double extent = Math.abs(directionX) * halfWidth + Math.abs(directionY) * LABEL_HALF_HEIGHT;
+        boolean reserveMiddle = link.optional() || link.connectionType() == ConnectionType.CONVERGENCE;
+        double x = middleX;
+        double y = middleY;
+        if (reserveMiddle && LABEL_MARGIN + 2 * extent + 2 <= visible / 2) {
+            // the middle carries the optional marker or the convergence arrow
+            x = middleX + directionX * (extent + LABEL_MARGIN);
+            y = middleY + directionY * (extent + LABEL_MARGIN);
+        } else if (reserveMiddle || 2 * extent + 2 > visible) {
+            // the edge is too short, so the label is placed beside the edge instead
+            double normalX = -directionY;
+            double normalY = directionX;
+            if (normalY > 0) {
+                normalX = -normalX;
+                normalY = -normalY;
+            }
+            double offset = LABEL_MARGIN + Math.abs(normalX) * halfWidth + Math.abs(normalY) * LABEL_HALF_HEIGHT;
+            x = middleX + normalX * offset;
+            y = middleY + normalY * offset;
+        }
+        svg.append("<text class=\"edge-label\" text-anchor=\"middle\" x=\"").append(format(x))
+            .append("\" y=\"").append(format(y + 4)).append("\">").append(escape(link.label())).append("</text>");
+    }
+
+    private double borderDistance(Node node, double unitX, double unitY) {
+        double halfWidth;
+        double halfHeight;
+        switch (node.type()) {
+            case LEVEL -> {
+                return LEVEL_RADIUS;
+            }
+            case FACT -> {
+                halfWidth = FACT_WIDTH / 2.0;
+                halfHeight = factHeight(node) / 2;
+            }
+            default -> {
+                halfWidth = DESCRIPTIVE_WIDTH / 2;
+                halfHeight = DESCRIPTIVE_HEIGHT / 2;
+            }
+        }
+        double horizontal = Math.abs(unitX) < 1e-9 ? Double.POSITIVE_INFINITY : halfWidth / Math.abs(unitX);
+        double vertical = Math.abs(unitY) < 1e-9 ? Double.POSITIVE_INFINITY : halfHeight / Math.abs(unitY);
+        return Math.min(horizontal, vertical);
     }
 
     private void appendLine(StringBuilder svg, double sourceX, double sourceY,
@@ -291,7 +357,7 @@ public class DfmVisualizationService {
         }
     }
 
-    private record Link(Node source, Node target, ConnectionType connectionType, boolean optional) {
+    private record Link(Node source, Node target, ConnectionType connectionType, boolean optional, String label) {
     }
 
     private record Graph(List<Node> nodes, List<Link> links) {

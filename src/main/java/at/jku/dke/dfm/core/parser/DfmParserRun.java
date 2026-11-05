@@ -50,6 +50,7 @@ final class DfmParserRun {
                 .findFirst().orElseThrow(() -> new DfmParseException("Dimension not found for connection "
                     + connection.getRelationFromName() + " - " + connection.getRelationToName()));
             fact.getDimensions().add(dimension);
+            dimension.setFactConnectionLabel(connection.getLabel());
             dimensions.remove(dimension);
         }
 
@@ -118,7 +119,14 @@ final class DfmParserRun {
             }
             boolean optionalConnection = accept(TokenType.LPAREN);
             var connection = next();
-            level.setConnectionType(parseConnectionType(connection));
+            var connectionType = parseConnectionType(connection);
+            if ((connection.type == TokenType.DASH || connection.type == TokenType.EQUALS)
+                && accept(TokenType.LBRACKET)) {
+                level.setConnectionLabel(expectWord("Expected connection description."));
+                expect(TokenType.RBRACKET, "Expected ']' after connection description.");
+                connectionType = parseLabeledConnectionEnd(connection);
+            }
+            level.setConnectionType(connectionType);
             if (optionalConnection) {
                 expect(TokenType.RPAREN, "Expected ')' after optional connection.");
                 level.setConnectionOptional(true);
@@ -133,9 +141,32 @@ final class DfmParserRun {
         if (type.type != TokenType.DASH) {
             throw error("Expected '-' in fact-dimension connection.");
         }
+        String label = null;
+        if (accept(TokenType.LBRACKET)) {
+            label = expectWord("Expected connection description.");
+            expect(TokenType.RBRACKET, "Expected ']' after connection description.");
+            expect(TokenType.DASH, "Expected '-' after connection description.");
+        }
         var connection = new FactDimensionElement(from, expectWord("Expected dimension name in connection."));
         connection.setRelationType(ConnectionType.SIMPLE);
+        connection.setLabel(label);
         return connection;
+    }
+
+    private ConnectionType parseLabeledConnectionEnd(Token opening) {
+        var closing = next();
+        if (opening.type == TokenType.EQUALS && closing.type == TokenType.EQUALS) {
+            return ConnectionType.MULTIPLE;
+        }
+        if (opening.type == TokenType.DASH && closing.type == TokenType.DASH) {
+            return ConnectionType.SIMPLE;
+        }
+        if (opening.type == TokenType.DASH && closing.type == TokenType.ARROW) {
+            return ConnectionType.CONVERGENCE;
+        }
+        var expected = opening.type == TokenType.EQUALS ? "'='" : "'-' or '->'";
+        throw new DfmParseException("Expected " + expected + " after connection description.",
+            closing.line, closing.column);
     }
 
     private ConnectionType parseConnectionType(Token token) {
@@ -190,6 +221,8 @@ final class DfmParserRun {
                     case '=' -> TokenType.EQUALS;
                     case '(' -> TokenType.LPAREN;
                     case ')' -> TokenType.RPAREN;
+                    case '[' -> TokenType.LBRACKET;
+                    case ']' -> TokenType.RBRACKET;
                     default -> throw new DfmParseException("Unexpected character '" + c + "'.", line, column);
                 };
                 result.add(new Token(type, String.valueOf(c), line, column));
@@ -251,6 +284,6 @@ final class DfmParserRun {
     }
 
     private enum TokenType {
-        WORD, LBRACE, RBRACE, SEMICOLON, DASH, EQUALS, ARROW, LPAREN, RPAREN, END
+        WORD, LBRACE, RBRACE, SEMICOLON, DASH, EQUALS, ARROW, LPAREN, RPAREN, LBRACKET, RBRACKET, END
     }
 }

@@ -46,7 +46,7 @@ public class FactElement extends AbstractElement {
         var left = dimensions.stream().sorted(Comparator.comparing(DimensionElement::getName)).toList();
         var right = fact.dimensions.stream().sorted(Comparator.comparing(DimensionElement::getName)).toList();
         for (int i = 0; i < left.size(); i++) {
-            if (!left.get(i).structurallyEquals(right.get(i))) {
+            if (!left.get(i).structurallyEquals(right.get(i)) || !left.get(i).hasSameFactConnectionLabel(right.get(i))) {
                 return false;
             }
         }
