@@ -24,6 +24,9 @@ final class DfmParserRun {
     }
 
     List<AbstractElement> parse() {
+        if (peek(TokenType.END)) {
+            throw new DfmParseException("DFM input must not be empty.");
+        }
         var facts = new ArrayList<FactElement>();
         var dimensions = new ArrayList<DimensionElement>();
         var connections = new ArrayList<FactDimensionElement>();
@@ -159,6 +162,11 @@ final class DfmParserRun {
                     column++;
                 }
                 i++;
+            } else if (c == '/' && i + 1 < source.length() && source.charAt(i + 1) == '/') {
+                while (i < source.length() && source.charAt(i) != '\n') {
+                    i++;
+                    column++;
+                }
             } else if (Character.isLetterOrDigit(c) || c == '_') {
                 int tokenLine = line;
                 int tokenColumn = column;

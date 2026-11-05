@@ -166,6 +166,42 @@ class DfmParserTest {
     }
 
     @Test
+    void ignoresLineComments() {
+        var elements = new DfmParser().parse("""
+            // leading comment
+            fact Sales { profit; // trailing comment
+              {descriptive} clerk; }; // fact done
+            dimension Time { day - month; }; //
+            Sales - Time; // connection
+            // final comment without newline""");
+
+        assertEquals(1, elements.size());
+        var fact = (FactElement) elements.get(0);
+        assertEquals(1, fact.getMeasures().size());
+        assertEquals(1, fact.getDescriptives().size());
+        assertEquals(1, fact.getDimensions().size());
+    }
+
+    @Test
+    void rejectsInputConsistingOnlyOfComments() {
+        assertThrows(DfmParseException.class, () -> new DfmParser().parse("// nothing here\n// at all"));
+    }
+
+    @Test
+    void reportsCorrectPositionAfterComment() {
+        var exception = assertThrows(DfmParseException.class,
+            () -> new DfmParser().parse("// comment\nfact Sales { profit; }; #"));
+
+        assertEquals(2, exception.getLine());
+        assertEquals(25, exception.getColumn());
+    }
+
+    @Test
+    void rejectsSingleSlash() {
+        assertThrows(DfmParseException.class, () -> new DfmParser().parse("fact Sales { profit; }; / comment"));
+    }
+
+    @Test
     void sharedInstanceIsSafeForConcurrentUse() throws Exception {
         var parser = new DfmParser();
         var sources = List.of(

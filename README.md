@@ -52,6 +52,15 @@ Within a hierarchy, levels are chained with connections:
 
 Dimensions that are not connected to a fact are kept as separate top-level elements.
 
+### Comments
+
+`//` starts a line comment that runs to the end of the line. Comments are allowed anywhere whitespace is, and are ignored by the parser; line and column numbers in errors still refer to the original source. Input that contains only comments is rejected like empty input.
+
+```
+// sales model
+fact Sales { profit; };   // measure
+```
+
 ### Errors
 
 Invalid input results in a `DfmParseException` carrying the 1-based `getLine()` and `getColumn()` of the offending token (`-1` if no position is available, e.g. for empty input). Unexpectedly truncated input is reported at the end of the source.
