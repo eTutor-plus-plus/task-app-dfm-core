@@ -159,6 +159,20 @@ class DfmGraphBuilderTest {
     }
 
     @Test
+    void keepsRecursiveHierarchyAsLabeledSelfLoop() {
+        var graph = build("fact Sales { profit; }; "
+            + "dimension SalesRepresentative { salesRepresentative -[supervisor]-> salesRepresentative; }; "
+            + "Sales - SalesRepresentative;");
+
+        var loop = edge(graph, "salesRepresentative", "salesRepresentative");
+        assertEquals("supervisor", loop.label());
+        assertEquals(loop.source(), loop.target());
+        assertEquals(ConnectionType.CONVERGENCE, loop.connectionType());
+        assertEquals(2, graph.nodes().size());
+        assertEquals(2, graph.edges().size());
+    }
+
+    @Test
     void ignoresDuplicateEdges() {
         var graph = build("dimension D { a - b; a - b; };");
 

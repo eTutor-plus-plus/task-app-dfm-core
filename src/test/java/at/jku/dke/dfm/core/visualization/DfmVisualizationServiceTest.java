@@ -12,6 +12,36 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DfmVisualizationServiceTest {
     @Test
+    void rendersSharedHierarchyEntryAsDoubleCircle() {
+        var svg = render("hierarchy h { a - b; }; dimension d { x - {shared} h; };");
+
+        assertEquals(4, svg.split("<circle", -1).length - 1);
+        assertTrue(svg.contains("r=\"14.0\""));
+        assertFalse(svg.contains(" A 14.0 14.0 "));
+        assertTrue(svg.contains(">a</text>"));
+    }
+
+    @Test
+    void rendersCrossAttributeAsCircleWithArc() {
+        var svg = render("hierarchy h { a; }; dimension d { x - {cross} h; };");
+
+        assertEquals(2, svg.split("<circle", -1).length - 1);
+        assertEquals(1, svg.split(" A 14.0 14.0 ", -1).length - 1);
+    }
+
+    @Test
+    void rendersModelWithSharedAndCrossHierarchies() {
+        var svg = render("fact Sales { profit; }; hierarchy VAT { VAT - vatClass; };"
+            + " hierarchy city { city - country - {cross} VAT; city = region; };"
+            + " dimension city { {shared} city; }; dimension product { product - category - {cross} VAT; };"
+            + " Sales -[storeCity]- city; Sales - product;");
+
+        assertTrue(svg.endsWith("</svg>"));
+        assertTrue(svg.contains(">VAT</text>"));
+        assertTrue(svg.contains(">storeCity</text>"));
+    }
+
+    @Test
     void rendersEscapedDfmNamesAsSvg() {
         var elements = new DfmParser().parse("fact Sales { profit; };");
         var svg = new DfmVisualizationService().render(elements);
@@ -149,6 +179,25 @@ class DfmVisualizationServiceTest {
         var svg = render("fact Sales { profit; }; dimension D { a -> b; }; Sales - D;");
 
         assertTrue(svg.contains("marker-end=\"url(#arrow)\""));
+    }
+
+    @Test
+    void rendersRecursiveHierarchyAsSelfLoopWithRole() {
+        var svg = render("fact Sales { profit; }; "
+            + "dimension SalesRepresentative { salesRepresentative -[supervisor]-> salesRepresentative; }; "
+            + "Sales - SalesRepresentative;");
+
+        assertEquals(1, count(svg, "<path class=\"edge\" d=\"M "));
+        assertEquals(1, count(svg, ">supervisor</text>"));
+        assertEquals(1, count(svg, "<circle"));
+        assertTrue(svg.contains("marker-end=\"url(#arrow)\""));
+    }
+
+    @Test
+    void rendersNoLoopForSelfReferenceWithoutRole() {
+        var svg = render("dimension D { a - a; };");
+
+        assertFalse(svg.contains("<path class=\"edge\""));
     }
 
     @Test

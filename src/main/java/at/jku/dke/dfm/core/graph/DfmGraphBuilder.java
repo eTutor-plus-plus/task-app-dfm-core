@@ -3,11 +3,15 @@ package at.jku.dke.dfm.core.graph;
 import at.jku.dke.dfm.core.models.ast.AbstractElement;
 import at.jku.dke.dfm.core.models.ast.DimensionElement;
 import at.jku.dke.dfm.core.models.ast.FactElement;
+import at.jku.dke.dfm.core.models.ast.Hierarchy;
+import at.jku.dke.dfm.core.models.ast.HierarchyDefinitionElement;
 import at.jku.dke.dfm.core.models.ast.Level;
 import at.jku.dke.dfm.core.models.enums.ConnectionType;
 import at.jku.dke.dfm.core.models.enums.LevelType;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -17,7 +21,12 @@ import java.util.Map;
  * <p>
  * Same-named levels share one node within a dimension, but not across dimensions. A fact is connected to the
  * head of the first hierarchy of each of its dimensions; further hierarchies are only reachable via their
- * shared levels.
+ * shared levels. A level that refers to itself with a role ({@code a -[role]-> a}) yields a self-loop edge
+ * (recursive hierarchy); a self-reference without a role is ignored.
+ * <p>
+ * The levels of a declared hierarchy ({@link HierarchyDefinitionElement}) form one node each, independent of the
+ * dimensions. A {@code {shared}} or {@code {cross}} level is not a node of its own: its edge ends at the entry level
+ * of the referenced hierarchy, which gets the kind {@link NodeKind#SHARED} or {@link NodeKind#CROSS}.
  * <p>
  * This class is stateless and thread-safe.
  */
@@ -27,6 +36,7 @@ public class DfmGraphBuilder {
         var edges = new ArrayList<GraphEdge>();
         var facts = new ArrayList<FactData>();
         var dimensions = new ArrayList<DimensionData>();
+        var definitions = new LinkedHashMap<String, HierarchyDefinitionElement>();
         int factIndex = 0;
         int dimensionIndex = 0;
 
@@ -49,17 +59,20 @@ public class DfmGraphBuilder {
                 facts.add(new FactData(fact, factId, factDimensions));
             } else if (element instanceof DimensionElement dimension) {
                 dimensions.add(new DimensionData(dimension, "dimension-" + dimensionIndex++));
+            } else if (element instanceof HierarchyDefinitionElement definition) {
+                definitions.putIfAbsent(definition.getName(), definition);
             }
         }
 
+        var referenceKinds = referenceKinds(dimensions, definitions.values());
+
         for (var dimension : dimensions) {
-            for (var hierarchy : dimension.element().getHierarchies()) {
-                for (Level level = hierarchy.getHead(); level != null; level = level.getNextLevel()) {
-                    var kind = level.getLevelType() == LevelType.DESCRIPTIVE ? NodeKind.DESCRIPTIVE : NodeKind.LEVEL;
-                    addNode(nodes, new GraphNode(levelId(dimension, level.getName()), level.getName(), kind,
-                        level.isOptional(), List.of()));
-                }
-            }
+            addLevelNodes(nodes, dimension.id(), dimension.element().getHierarchies(), null, null);
+        }
+        for (var definition : definitions.values()) {
+            var entry = definition.getHead();
+            addLevelNodes(nodes, definitionPrefix(definition), definition.getHierarchies(),
+                entry == null ? null : entry.getName(), referenceKinds.get(definition.getName()));
         }
 
         for (var factData : facts) {
@@ -71,23 +84,66 @@ public class DfmGraphBuilder {
                 var hierarchies = dimension.element().getHierarchies();
                 if (!hierarchies.isEmpty() && hierarchies.get(0).getHead() != null) {
                     addEdge(edges, nodes, factData.id(),
-                        levelId(dimension, hierarchies.get(0).getHead().getName()), ConnectionType.SIMPLE, false,
-                        dimension.element().getFactConnectionLabel());
+                        levelId(dimension.id(), hierarchies.get(0).getHead(), definitions), ConnectionType.SIMPLE,
+                        false, dimension.element().getFactConnectionLabel());
                 }
             }
         }
 
         for (var dimension : dimensions) {
-            for (var hierarchy : dimension.element().getHierarchies()) {
-                for (Level level = hierarchy.getHead(); level != null && level.getNextLevel() != null;
-                     level = level.getNextLevel()) {
-                    addEdge(edges, nodes, levelId(dimension, level.getName()),
-                        levelId(dimension, level.getNextLevel().getName()),
-                        level.getConnectionType(), level.isConnectionOptional(), level.getConnectionLabel());
+            addChainEdges(edges, nodes, dimension.id(), dimension.element().getHierarchies(), definitions);
+        }
+        for (var definition : definitions.values()) {
+            addChainEdges(edges, nodes, definitionPrefix(definition), definition.getHierarchies(), definitions);
+        }
+        return new DfmGraph(new ArrayList<>(nodes.values()), edges);
+    }
+
+    // the kind of the first reference to a hierarchy wins; the parser rejects mixed use
+    private Map<String, NodeKind> referenceKinds(List<DimensionData> dimensions,
+                                                 Collection<HierarchyDefinitionElement> definitions) {
+        var kinds = new HashMap<String, NodeKind>();
+        var chains = new ArrayList<Hierarchy>();
+        dimensions.forEach(dimension -> chains.addAll(dimension.element().getHierarchies()));
+        definitions.forEach(definition -> chains.addAll(definition.getHierarchies()));
+        for (var chain : chains) {
+            for (Level level = chain.getHead(); level != null; level = level.getNextLevel()) {
+                if (level.getLevelType().isReference()) {
+                    kinds.putIfAbsent(level.getName(),
+                        level.getLevelType() == LevelType.SHARED ? NodeKind.SHARED : NodeKind.CROSS);
                 }
             }
         }
-        return new DfmGraph(new ArrayList<>(nodes.values()), edges);
+        return kinds;
+    }
+
+    private void addLevelNodes(Map<String, GraphNode> nodes, String prefix, List<Hierarchy> hierarchies,
+                               String entryName, NodeKind entryKind) {
+        for (var hierarchy : hierarchies) {
+            for (Level level = hierarchy.getHead(); level != null; level = level.getNextLevel()) {
+                if (level.getLevelType().isReference()) {
+                    continue;
+                }
+                var kind = level.getLevelType() == LevelType.DESCRIPTIVE ? NodeKind.DESCRIPTIVE : NodeKind.LEVEL;
+                if (entryKind != null && level.getName().equals(entryName)) {
+                    kind = entryKind;
+                }
+                addNode(nodes, new GraphNode(levelId(prefix, level.getName()), level.getName(), kind,
+                    level.isOptional(), List.of()));
+            }
+        }
+    }
+
+    private void addChainEdges(List<GraphEdge> edges, Map<String, GraphNode> nodes, String prefix,
+                               List<Hierarchy> hierarchies, Map<String, HierarchyDefinitionElement> definitions) {
+        for (var hierarchy : hierarchies) {
+            for (Level level = hierarchy.getHead(); level != null && level.getNextLevel() != null;
+                 level = level.getNextLevel()) {
+                addEdge(edges, nodes, levelId(prefix, level, definitions),
+                    levelId(prefix, level.getNextLevel(), definitions),
+                    level.getConnectionType(), level.isConnectionOptional(), level.getConnectionLabel());
+            }
+        }
     }
 
     private void addNode(Map<String, GraphNode> nodes, GraphNode node) {
@@ -98,8 +154,24 @@ public class DfmGraphBuilder {
         return factId + "-descriptive-" + index;
     }
 
-    private String levelId(DimensionData dimension, String levelName) {
-        return dimension.id() + "-level-" + levelName;
+    private String definitionPrefix(HierarchyDefinitionElement definition) {
+        return "hierarchy-" + definition.getName();
+    }
+
+    private String levelId(String prefix, String levelName) {
+        return prefix + "-level-" + levelName;
+    }
+
+    // a reference resolves to the entry level of the declared hierarchy, or to nothing if it is not declared
+    private String levelId(String prefix, Level level, Map<String, HierarchyDefinitionElement> definitions) {
+        if (!level.getLevelType().isReference()) {
+            return levelId(prefix, level.getName());
+        }
+        var definition = definitions.get(level.getName());
+        if (definition == null || definition.getHead() == null) {
+            return null;
+        }
+        return levelId(definitionPrefix(definition), definition.getHead().getName());
     }
 
     private void addEdge(List<GraphEdge> edges, Map<String, GraphNode> nodes, String source, String target,
@@ -109,7 +181,8 @@ public class DfmGraphBuilder {
 
     private void addEdge(List<GraphEdge> edges, Map<String, GraphNode> nodes, String source, String target,
                          ConnectionType connectionType, boolean optional, String label) {
-        if (!nodes.containsKey(source) || !nodes.containsKey(target) || source.equals(target)) {
+        // a self-reference is only meaningful as a recursive hierarchy, i.e. with a role
+        if (!nodes.containsKey(source) || !nodes.containsKey(target) || (source.equals(target) && label == null)) {
             return;
         }
         for (var edge : edges) {

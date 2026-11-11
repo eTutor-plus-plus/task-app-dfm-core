@@ -18,12 +18,17 @@ public class DfmVisualizationService {
     private static final double FACT_WIDTH = 120;
     private static final double FACT_BASE_HEIGHT = 35;
     private static final double LEVEL_RADIUS = 10;
+    private static final double SHARED_RING_GAP = 4;
     private static final double DESCRIPTIVE_WIDTH = 100;
     private static final double DESCRIPTIVE_HEIGHT = 20;
     private static final double LINK_DISTANCE = 220;
     private static final double COLLISION_PADDING = 24;
     private static final double LABEL_MARGIN = 9;
     private static final double LABEL_HALF_HEIGHT = 7;
+    private static final double SELF_LOOP_HEIGHT = 38;
+    private static final double SELF_LOOP_HALF_WIDTH = 26;
+    private static final double SELF_LOOP_HALF_GAP = 6;
+    private static final double SELF_LOOP_MAX_CLEARANCE = Math.toRadians(70);
 
     public String render(List<AbstractElement> elements) {
         var graph = createGraph(elements);
@@ -41,7 +46,11 @@ public class DfmVisualizationService {
             .append("<path d=\"M 0 0 L 10 5 L 0 10 z\" fill=\"#222\"/></marker></defs>");
 
         for (var link : graph.links()) {
-            appendLink(svg, link);
+            if (link.source() == link.target()) {
+                appendSelfLoop(svg, link, graph.links());
+            } else {
+                appendLink(svg, link);
+            }
         }
         for (var node : graph.nodes()) {
             appendNode(svg, node);
@@ -72,6 +81,8 @@ public class DfmVisualizationService {
             case FACT -> NodeType.FACT;
             case LEVEL -> NodeType.LEVEL;
             case DESCRIPTIVE -> NodeType.DESCRIPTIVE;
+            case SHARED -> NodeType.SHARED;
+            case CROSS -> NodeType.CROSS;
         };
     }
 
@@ -108,6 +119,9 @@ public class DfmVisualizationService {
                 }
             }
             for (var link : links) {
+                if (link.source() == link.target()) {
+                    continue;
+                }
                 int source = nodes.indexOf(link.source());
                 int target = nodes.indexOf(link.target());
                 double dx = link.target().x - link.source().x;
@@ -135,7 +149,7 @@ public class DfmVisualizationService {
     private double collisionRadius(Node node) {
         return switch (node.type()) {
             case FACT -> FACT_WIDTH / 1.5;
-            case LEVEL -> LEVEL_RADIUS * 7;
+            case LEVEL, SHARED, CROSS -> LEVEL_RADIUS * 7;
             case DESCRIPTIVE -> DESCRIPTIVE_WIDTH / 1.5;
         };
     }
@@ -192,6 +206,70 @@ public class DfmVisualizationService {
         }
     }
 
+    private void appendSelfLoop(StringBuilder svg, Link link, List<Link> links) {
+        var node = link.source();
+
+        // the loop points upwards (node names hang below the nodes) and as far away from the connected edges
+        // as possible; without a clear difference it points straight up
+        var neighborAngles = new ArrayList<Double>();
+        for (var other : links) {
+            if (other.source() == other.target()) {
+                continue;
+            }
+            if (other.source() == node || other.target() == node) {
+                var neighbor = other.source() == node ? other.target() : other.source();
+                neighborAngles.add(Math.atan2(neighbor.y - node.y, neighbor.x - node.x));
+            }
+        }
+        double bestAngle = -Math.PI / 2;
+        double bestScore = Double.NEGATIVE_INFINITY;
+        for (int degrees = -150; degrees <= -30; degrees += 5) {
+            double angle = Math.toRadians(degrees);
+            double clearance = SELF_LOOP_MAX_CLEARANCE;
+            for (double neighborAngle : neighborAngles) {
+                clearance = Math.min(clearance,
+                    Math.abs(Math.atan2(Math.sin(angle - neighborAngle), Math.cos(angle - neighborAngle))));
+            }
+            double score = clearance - Math.abs(angle + Math.PI / 2) * 0.01;
+            if (score > bestScore) {
+                bestScore = score;
+                bestAngle = angle;
+            }
+        }
+        double dirX = Math.cos(bestAngle);
+        double dirY = Math.sin(bestAngle);
+        double perpX = -dirY;
+        double perpY = dirX;
+
+        double startAlong = Math.sqrt(LEVEL_RADIUS * LEVEL_RADIUS - SELF_LOOP_HALF_GAP * SELF_LOOP_HALF_GAP);
+        double controlAlong = LEVEL_RADIUS + SELF_LOOP_HEIGHT;
+        svg.append("<path class=\"edge\" d=\"M ")
+            .append(format(node.x - perpX * SELF_LOOP_HALF_GAP + dirX * startAlong)).append(' ')
+            .append(format(node.y - perpY * SELF_LOOP_HALF_GAP + dirY * startAlong))
+            .append(" C ")
+            .append(format(node.x - perpX * SELF_LOOP_HALF_WIDTH + dirX * controlAlong)).append(' ')
+            .append(format(node.y - perpY * SELF_LOOP_HALF_WIDTH + dirY * controlAlong)).append(", ")
+            .append(format(node.x + perpX * SELF_LOOP_HALF_WIDTH + dirX * controlAlong)).append(' ')
+            .append(format(node.y + perpY * SELF_LOOP_HALF_WIDTH + dirY * controlAlong)).append(", ")
+            .append(format(node.x + perpX * SELF_LOOP_HALF_GAP + dirX * startAlong)).append(' ')
+            .append(format(node.y + perpY * SELF_LOOP_HALF_GAP + dirY * startAlong)).append('"');
+        if (link.connectionType() == ConnectionType.CONVERGENCE) {
+            svg.append(" marker-end=\"url(#arrow)\"");
+        }
+        svg.append("/>");
+
+        if (link.label() != null) {
+            double halfWidth = link.label().length() * 7 / 2;
+            double tip = 0.75 * controlAlong + 0.25 * startAlong;
+            double extent = Math.abs(dirX) * halfWidth + Math.abs(dirY) * LABEL_HALF_HEIGHT;
+            double distance = tip + LABEL_MARGIN + extent;
+            svg.append("<text class=\"edge-label\" text-anchor=\"middle\" x=\"")
+                .append(format(node.x + dirX * distance)).append("\" y=\"")
+                .append(format(node.y + dirY * distance + 4)).append("\">")
+                .append(escape(link.label())).append("</text>");
+        }
+    }
+
     private void appendLinkLabel(StringBuilder svg, Link link, double dx, double dy, double distance) {
         double halfWidth = link.label().length() * 7 / 2;
         double unitX = dx / distance;
@@ -235,8 +313,11 @@ public class DfmVisualizationService {
         double halfWidth;
         double halfHeight;
         switch (node.type()) {
-            case LEVEL -> {
+            case LEVEL, CROSS -> {
                 return LEVEL_RADIUS;
+            }
+            case SHARED -> {
+                return LEVEL_RADIUS + SHARED_RING_GAP;
             }
             case FACT -> {
                 halfWidth = FACT_WIDTH / 2.0;
@@ -282,10 +363,7 @@ public class DfmVisualizationService {
             }
             return;
         }
-        if (node.type() == NodeType.LEVEL) {
-            svg.append("<circle cx=\"").append(format(node.x)).append("\" cy=\"").append(format(node.y))
-                .append("\" r=\"").append(LEVEL_RADIUS).append("\" fill=\"white\" stroke=\"blue\"/>");
-        } else {
+        if (node.type() == NodeType.DESCRIPTIVE) {
             svg.append("<rect x=\"").append(format(node.x - DESCRIPTIVE_WIDTH / 2)).append("\" y=\"")
                 .append(format(node.y - DESCRIPTIVE_HEIGHT / 2)).append("\" width=\"")
                 .append(DESCRIPTIVE_WIDTH).append("\" height=\"").append(DESCRIPTIVE_HEIGHT)
@@ -297,6 +375,18 @@ public class DfmVisualizationService {
                 .append(format(node.x + DESCRIPTIVE_WIDTH / 2)).append("\" y2=\"")
                 .append(format(node.y + DESCRIPTIVE_HEIGHT / 2)).append("\" stroke=\"black\"/>");
             return;
+        }
+        svg.append("<circle cx=\"").append(format(node.x)).append("\" cy=\"").append(format(node.y))
+            .append("\" r=\"").append(LEVEL_RADIUS).append("\" fill=\"white\" stroke=\"blue\"/>");
+        if (node.type() == NodeType.SHARED) {
+            svg.append("<circle cx=\"").append(format(node.x)).append("\" cy=\"").append(format(node.y))
+                .append("\" r=\"").append(LEVEL_RADIUS + SHARED_RING_GAP).append("\" fill=\"none\" stroke=\"blue\"/>");
+        } else if (node.type() == NodeType.CROSS) {
+            double arcRadius = LEVEL_RADIUS + SHARED_RING_GAP;
+            svg.append("<path d=\"M ").append(format(node.x - arcRadius)).append(' ').append(format(node.y - 4))
+                .append(" A ").append(format(arcRadius)).append(' ').append(format(arcRadius))
+                .append(" 0 0 1 ").append(format(node.x - 4)).append(' ').append(format(node.y - arcRadius))
+                .append("\" fill=\"none\" stroke=\"blue\"/>");
         }
         svg.append("<text text-anchor=\"middle\" x=\"").append(format(node.x)).append("\" y=\"")
             .append(format(node.y + 20)).append("\">").append(escape(node.name)).append("</text>");
@@ -327,7 +417,7 @@ public class DfmVisualizationService {
     }
 
     private enum NodeType {
-        FACT, LEVEL, DESCRIPTIVE
+        FACT, LEVEL, DESCRIPTIVE, SHARED, CROSS
     }
 
     private static final class Node {

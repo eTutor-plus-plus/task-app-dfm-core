@@ -5,18 +5,24 @@ import at.jku.dke.dfm.core.models.ast.DimensionElement;
 import at.jku.dke.dfm.core.models.ast.FactDimensionElement;
 import at.jku.dke.dfm.core.models.ast.FactElement;
 import at.jku.dke.dfm.core.models.ast.Hierarchy;
+import at.jku.dke.dfm.core.models.ast.HierarchyDefinitionElement;
 import at.jku.dke.dfm.core.models.ast.Level;
 import at.jku.dke.dfm.core.models.enums.ConnectionType;
 import at.jku.dke.dfm.core.models.enums.LevelType;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 /**
  * A single parse run holding the mutable token state. Instances must not be shared or reused.
  */
 final class DfmParserRun {
     private final List<Token> tokens;
+    private final List<HierarchyReference> references = new ArrayList<>();
     private int position;
 
     DfmParserRun(String source) {
@@ -29,6 +35,7 @@ final class DfmParserRun {
         }
         var facts = new ArrayList<FactElement>();
         var dimensions = new ArrayList<DimensionElement>();
+        var definitions = new ArrayList<HierarchyDefinitionElement>();
         var connections = new ArrayList<FactDimensionElement>();
 
         while (!peek(TokenType.END)) {
@@ -36,11 +43,20 @@ final class DfmParserRun {
                 facts.add(parseFact());
             } else if (acceptWord("dimension")) {
                 dimensions.add(parseDimension());
+            } else if (acceptWord("hierarchy")) {
+                var nameToken = tokens.get(position);
+                var definition = parseHierarchyDefinition();
+                if (definitions.stream().anyMatch(candidate -> candidate.getName().equals(definition.getName()))) {
+                    throw new DfmParseException("Hierarchy " + definition.getName() + " is declared more than once.",
+                        nameToken.line, nameToken.column);
+                }
+                definitions.add(definition);
             } else {
                 connections.add(parseConnection());
             }
             expect(TokenType.SEMICOLON, "Expected ';' after declaration.");
         }
+        resolveHierarchyReferences(definitions);
 
         for (var connection : connections) {
             var fact = facts.stream().filter(candidate -> candidate.getName().equals(connection.getRelationFromName()))
@@ -56,7 +72,55 @@ final class DfmParserRun {
 
         var result = new ArrayList<AbstractElement>(facts);
         result.addAll(dimensions);
+        result.addAll(definitions);
         return result;
+    }
+
+    private void resolveHierarchyReferences(List<HierarchyDefinitionElement> definitions) {
+        var declared = new HashSet<String>();
+        definitions.forEach(definition -> declared.add(definition.getName()));
+
+        var usedAs = new HashMap<String, LevelType>();
+        for (var reference : references) {
+            if (!declared.contains(reference.name())) {
+                throw new DfmParseException("Hierarchy " + reference.name() + " is not declared.",
+                    reference.token().line, reference.token().column);
+            }
+            var firstUse = usedAs.putIfAbsent(reference.name(), reference.type());
+            if (firstUse != null && firstUse != reference.type()) {
+                throw new DfmParseException("Hierarchy " + reference.name() + " is used as {"
+                    + marker(firstUse) + "} and as {" + marker(reference.type())
+                    + "}; it can only be one of them.", reference.token().line, reference.token().column);
+            }
+        }
+
+        var state = new HashMap<String, Boolean>();
+        for (var definition : definitions) {
+            checkForCycle(definition.getName(), state);
+        }
+    }
+
+    // state: true while the hierarchy is being visited, false once it is done
+    private void checkForCycle(String hierarchy, Map<String, Boolean> state) {
+        if (state.containsKey(hierarchy)) {
+            return;
+        }
+        state.put(hierarchy, true);
+        for (var reference : references) {
+            if (!hierarchy.equals(reference.owner())) {
+                continue;
+            }
+            if (Boolean.TRUE.equals(state.get(reference.name()))) {
+                throw new DfmParseException("Hierarchy " + reference.name() + " must not refer to itself, neither"
+                    + " directly nor through other hierarchies.", reference.token().line, reference.token().column);
+            }
+            checkForCycle(reference.name(), state);
+        }
+        state.put(hierarchy, false);
+    }
+
+    private String marker(LevelType type) {
+        return type.name().toLowerCase(Locale.ROOT);
     }
 
     private FactElement parseFact() {
@@ -84,29 +148,73 @@ final class DfmParserRun {
         var dimension = new DimensionElement(expectWord("Expected dimension name."));
         expect(TokenType.LBRACE, "Expected '{' after dimension name.");
         while (!accept(TokenType.RBRACE)) {
-            dimension.getHierarchies().add(parseHierarchy());
+            dimension.getHierarchies().add(parseHierarchy(null));
             accept(TokenType.SEMICOLON);
         }
         return dimension;
     }
 
-    private Hierarchy parseHierarchy() {
+    private HierarchyDefinitionElement parseHierarchyDefinition() {
+        var definition = new HierarchyDefinitionElement(expectWord("Expected hierarchy name."));
+        expect(TokenType.LBRACE, "Expected '{' after hierarchy name.");
+        if (peek(TokenType.RBRACE)) {
+            throw error("A hierarchy must contain at least one chain.");
+        }
+        while (!accept(TokenType.RBRACE)) {
+            var start = tokens.get(position);
+            var chain = parseHierarchy(definition.getName());
+            var head = chain.getHead();
+            if (head == null) {
+                throw new DfmParseException("Expected a chain of levels.", start.line, start.column);
+            }
+            if (head.getLevelType().isReference()) {
+                throw new DfmParseException("A hierarchy must start with a level of its own, not with a {"
+                    + marker(head.getLevelType()) + "} level.", start.line, start.column);
+            }
+            var entry = definition.getHead();
+            if (entry != null && !entry.getName().equals(head.getName())) {
+                throw new DfmParseException("Every chain of hierarchy " + definition.getName()
+                    + " must start with " + entry.getName() + ".", start.line, start.column);
+            }
+            definition.getHierarchies().add(chain);
+            accept(TokenType.SEMICOLON);
+        }
+        return definition;
+    }
+
+    private Hierarchy parseHierarchy(String owner) {
         var hierarchy = new Hierarchy("");
         Level tail = null;
         while (!peek(TokenType.SEMICOLON) && !peek(TokenType.RBRACE)) {
-            boolean descriptive = false;
+            var levelType = LevelType.LEVEL;
+            var optionalToken = tokens.get(position);
             boolean optional = accept(TokenType.LPAREN);
             if (accept(TokenType.LBRACE)) {
-                expectWord("Expected 'descriptive'.");
-                expect(TokenType.RBRACE, "Expected '}' after descriptive marker.");
-                descriptive = true;
+                var marker = expectWord("Expected 'descriptive', 'shared' or 'cross'.");
+                expect(TokenType.RBRACE, "Expected '}' after level marker.");
+                levelType = switch (marker.toLowerCase(Locale.ROOT)) {
+                    case "shared" -> LevelType.SHARED;
+                    case "cross" -> LevelType.CROSS;
+                    default -> LevelType.DESCRIPTIVE;
+                };
             }
+            var nameToken = tokens.get(position);
             var level = new Level(expectWord("Expected hierarchy level name."), null);
             level.setOptional(optional);
             if (optional) {
                 expect(TokenType.RPAREN, "Expected ')' after optional level.");
             }
-            level.setLevelType(descriptive ? LevelType.DESCRIPTIVE : LevelType.LEVEL);
+            level.setLevelType(levelType);
+            if (levelType.isReference()) {
+                if (optional) {
+                    throw new DfmParseException("A {" + marker(levelType) + "} level cannot be optional;"
+                        + " mark the connection to it as optional instead.", optionalToken.line, optionalToken.column);
+                }
+                references.add(new HierarchyReference(level.getName(), levelType, nameToken, owner));
+                if (!peek(TokenType.SEMICOLON) && !peek(TokenType.RBRACE)) {
+                    throw error("A {" + marker(levelType) + "} level must be the last level of a chain.");
+                }
+            }
             if (tail == null) {
                 hierarchy.setHead(level);
             } else {
@@ -281,6 +389,10 @@ final class DfmParserRun {
     }
 
     private record Token(TokenType type, String text, int line, int column) {
+    }
+
+    // owner is the hierarchy declaration the reference occurs in, or null if it occurs in a dimension
+    private record HierarchyReference(String name, LevelType type, Token token, String owner) {
     }
 
     private enum TokenType {

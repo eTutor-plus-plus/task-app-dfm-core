@@ -7,5 +7,6 @@ public enum ElementType {
     FACT,
     DIMENSION,
     FACT_DIMENSION_CONNECTION,
-    HIERARCHY
+    HIERARCHY,
+    HIERARCHY_DEFINITION
 }
