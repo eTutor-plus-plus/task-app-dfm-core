@@ -96,9 +96,9 @@ class DfmParserTest {
     }
 
     @Test
-    void rejectsConnectionWithoutDash() {
+    void rejectsConvergenceFactConnection() {
         assertThrows(DfmParseException.class,
-            () -> new DfmParser().parse("fact Sales { profit; }; dimension D { a; }; Sales = D;"));
+            () -> new DfmParser().parse("fact Sales { profit; }; dimension D { a; }; Sales -> D;"));
     }
 
     @Test
@@ -292,7 +292,6 @@ class DfmParserTest {
     @ValueSource(strings = {
         "fact S { m; }; dimension T { d; }; S -[x]-> T;",
         "fact S { m; }; dimension T { d; }; S -[x]= T;",
-        "fact S { m; }; dimension T { d; }; S =[x]= T;",
         "fact S { m; }; dimension T { d; }; S -[]- T;",
         "fact S { m; }; dimension T { d; }; S -[x y]- T;",
         "fact S { m; }; dimension T { d; }; S -[x] T;",
@@ -305,6 +304,108 @@ class DfmParserTest {
 
         assertTrue(exception.getLine() >= 1);
         assertTrue(exception.getColumn() >= 1);
+    }
+
+    @Test
+    void retainsFactConnectionPropertiesAndRepeatedDimension() {
+        var source = "fact S { m; }; dimension T { d; }; "
+            + "S (-[shipping]-) T; S =[billing]= T;";
+        var parser = new DfmParser();
+        var fact = (FactElement) parser.parse(source).get(0);
+        assertEquals(2, fact.getDimensions().size());
+        var first = fact.getDimensions().get(0);
+        var second = fact.getDimensions().get(1);
+        assertTrue(first.isFactConnectionOptional());
+        assertEquals("shipping", first.getFactConnectionLabel());
+        assertEquals(ConnectionType.MULTIPLE, second.getFactConnectionType());
+        assertEquals("billing", second.getFactConnectionLabel());
+        assertTrue(fact.structurallyEquals(parser.parse("fact S { m; }; dimension T { d; }; "
+            + "S =[billing]= T; S (-[shipping]-) T;").get(0)));
+        assertFalse(fact.structurallyEquals(parser.parse("fact S { m; }; dimension T { d; }; "
+            + "S =[billing]= T; S -[shipping]- T;").get(0)));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "fact A { x; }; dimension T { t; }; A (-) T;",
+        "fact A { x; }; dimension T { t; }; A (=[role]=) T;",
+        "A -[shipping]- T; A -[billing]- T; fact A { x; }; dimension T { t; };"
+    })
+    void parsesNewFactConnectionForms(String source) {
+        assertFalse(new DfmParser().parse(source).isEmpty());
+    }
+
+    @Test
+    void rejectsDimensionSharedBetweenDifferentFacts() {
+        assertThrows(DfmParseException.class, () -> new DfmParser().parse(
+            "fact A { x; }; fact B { y; }; dimension T { t; }; A - T; B - T;"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "dimension D { a = a; };",
+        "dimension D { a (=) a; };",
+        "dimension D { a =[role]= a; };",
+        "dimension D { a (=[role]=) a; };",
+        "hierarchy H { a (=[role]=) a; };",
+        "dimension D { a - b =[role]= b; };"
+    })
+    void rejectsMultipleRecursiveConnections(String source) {
+        var exception = assertThrows(DfmParseException.class, () -> new DfmParser().parse(source));
+        assertTrue(exception.getMessage().contains("recursive connection cannot be multiple"));
+        assertTrue(exception.getLine() >= 1);
+        assertTrue(exception.getColumn() >= 1);
+    }
+
+    @Test
+    void reportsTargetLocationForMultipleRecursiveConnection() {
+        var exception = assertThrows(DfmParseException.class,
+            () -> new DfmParser().parse("dimension D {\n  a =[role]= a;\n};"));
+        assertEquals(2, exception.getLine());
+        assertEquals(14, exception.getColumn());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "dimension D { a (-[supervisor]-) a; };",
+        "dimension D { a (-[supervisor]->) a; };",
+        "dimension D { a (=[role]=) b; };",
+        "dimension D { a =[role]= A; };",
+        "hierarchy a { a; }; dimension D { a =[role]= {shared} a; };",
+        "fact A { m; }; dimension A { a; }; A = A;"
+    })
+    void acceptsOptionalRecursionAndMultipleNonrecursiveConnections(String source) {
+        assertFalse(new DfmParser().parse(source).isEmpty());
+    }
+
+    @Test
+    void distinguishesOneDimensionWithTwoRolesFromTwoSeparateDimensions() {
+        var parser = new DfmParser();
+        var shared = parser.parse("fact F { m; }; dimension D { d - city; }; "
+            + "F -[shipping]- D; F -[billing]- D;").get(0);
+        var separate = parser.parse("fact F { m; }; dimension D1 { d - city; }; dimension D2 { d - city; }; "
+            + "F -[shipping]- D1; F -[billing]- D2;").get(0);
+        assertFalse(shared.structurallyEquals(separate));
+        assertFalse(separate.structurallyEquals(shared));
+    }
+
+    @Test
+    void connectionsToTheSameDimensionShareItsMutableHierarchies() {
+        var fact = (FactElement) new DfmParser().parse("fact F { m; }; dimension D { d - city; }; "
+            + "F -[shipping]- D; F -[billing]- D;").get(0);
+        fact.getDimensions().get(0).getHierarchies().clear();
+        assertTrue(fact.getDimensions().get(1).getHierarchies().isEmpty());
+    }
+
+    @Test
+    void matchesDimensionGroupsIndependentlyOfDeclarationAndConnectionOrder() {
+        var parser = new DfmParser();
+        var first = parser.parse("fact F { m; }; dimension A { d; }; dimension B { d; }; "
+            + "F -[x]- A; F -[x]- B; F -[y]- B;").get(0);
+        var reordered = parser.parse("fact F { m; }; dimension C { d; }; dimension D { d; }; "
+            + "F -[y]- C; F -[x]- C; F -[x]- D;").get(0);
+        assertTrue(first.structurallyEquals(reordered));
+        assertTrue(reordered.structurallyEquals(first));
     }
 
     @Test

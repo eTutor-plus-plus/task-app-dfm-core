@@ -51,10 +51,15 @@ public class DfmGraphBuilder {
                     addNode(nodes, new GraphNode(descriptiveId, descriptive, NodeKind.DESCRIPTIVE, false, List.of()));
                 }
                 var factDimensions = new ArrayList<DimensionData>();
+                var definitionsByDimension = new HashMap<DimensionElement, DimensionData>();
                 for (var dimension : fact.getDimensions()) {
-                    var dimensionData = new DimensionData(dimension, "dimension-" + dimensionIndex++);
-                    dimensions.add(dimensionData);
-                    factDimensions.add(dimensionData);
+                    var existing = definitionsByDimension.get(dimension.getDefinition());
+                    if (existing == null) {
+                        existing = new DimensionData(dimension, "dimension-" + dimensionIndex++);
+                        definitionsByDimension.put(dimension.getDefinition(), existing);
+                        dimensions.add(existing);
+                    }
+                    factDimensions.add(new DimensionData(dimension, existing.id()));
                 }
                 facts.add(new FactData(fact, factId, factDimensions));
             } else if (element instanceof DimensionElement dimension) {
@@ -84,8 +89,9 @@ public class DfmGraphBuilder {
                 var hierarchies = dimension.element().getHierarchies();
                 if (!hierarchies.isEmpty() && hierarchies.get(0).getHead() != null) {
                     addEdge(edges, nodes, factData.id(),
-                        levelId(dimension.id(), hierarchies.get(0).getHead(), definitions), ConnectionType.SIMPLE,
-                        false, dimension.element().getFactConnectionLabel());
+                        levelId(dimension.id(), hierarchies.get(0).getHead(), definitions),
+                        dimension.element().getFactConnectionType(), dimension.element().isFactConnectionOptional(),
+                        dimension.element().getFactConnectionLabel());
                 }
             }
         }
@@ -181,17 +187,21 @@ public class DfmGraphBuilder {
 
     private void addEdge(List<GraphEdge> edges, Map<String, GraphNode> nodes, String source, String target,
                          ConnectionType connectionType, boolean optional, String label) {
-        // a self-reference is only meaningful as a recursive hierarchy, i.e. with a role
-        if (!nodes.containsKey(source) || !nodes.containsKey(target) || (source.equals(target) && label == null)) {
+        if (!nodes.containsKey(source) || !nodes.containsKey(target)) {
             return;
         }
-        for (var edge : edges) {
-            if (edge.source().equals(source) && edge.target().equals(target)) {
-                return;
-            }
+        if (source.equals(target) && connectionType == ConnectionType.MULTIPLE) {
+            throw new IllegalArgumentException("A recursive connection cannot be multiple.");
         }
-        edges.add(new GraphEdge(source, target, connectionType == null ? ConnectionType.SIMPLE : connectionType,
-            optional, label));
+        // a self-reference is only meaningful as a recursive hierarchy, i.e. with a role
+        if (source.equals(target) && label == null) {
+            return;
+        }
+        var edge = new GraphEdge(source, target, connectionType == null ? ConnectionType.SIMPLE : connectionType,
+            optional, label);
+        if (!edges.contains(edge)) {
+            edges.add(edge);
+        }
     }
 
     private record FactData(FactElement element, String id, List<DimensionData> dimensions) {

@@ -13,6 +13,7 @@ public class FactDimensionElement extends AbstractElement {
     private final String relationToName;
     private ConnectionType relationType = ConnectionType.SIMPLE;
     private String label;
+    private boolean optional;
 
     public FactDimensionElement(String relationFromName, String relationToName) {
         super(relationFromName, ElementType.FACT_DIMENSION_CONNECTION);
@@ -36,6 +37,14 @@ public class FactDimensionElement extends AbstractElement {
         this.relationType = relationType;
     }
 
+    public boolean isOptional() {
+        return optional;
+    }
+
+    public void setOptional(boolean optional) {
+        this.optional = optional;
+    }
+
     /**
      * The description of the connection, or {@code null} if it has none.
      */
@@ -53,6 +62,7 @@ public class FactDimensionElement extends AbstractElement {
             && relationFromName.equals(connection.relationFromName)
             && relationToName.equals(connection.relationToName)
             && relationType == connection.relationType
+            && optional == connection.optional
             && Objects.equals(label, connection.label);
     }
 }

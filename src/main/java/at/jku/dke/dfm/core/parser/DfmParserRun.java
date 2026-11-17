@@ -58,17 +58,21 @@ final class DfmParserRun {
         }
         resolveHierarchyReferences(definitions);
 
+        var owners = new HashMap<DimensionElement, FactElement>();
         for (var connection : connections) {
             var fact = facts.stream().filter(candidate -> candidate.getName().equals(connection.getRelationFromName()))
                 .findFirst().orElseThrow(() -> new DfmParseException("Fact not found for connection "
                     + connection.getRelationFromName() + " - " + connection.getRelationToName()));
-            var dimension = dimensions.stream().filter(candidate -> candidate.getName().equals(connection.getRelationToName()))
+            var dimension = dimensions.stream().filter(candidate ->
+                    candidate.getName().equals(connection.getRelationToName()) && !owners.containsKey(candidate))
+                .findFirst().orElseGet(() -> dimensions.stream().filter(candidate ->
+                    candidate.getName().equals(connection.getRelationToName()) && owners.get(candidate) == fact)
                 .findFirst().orElseThrow(() -> new DfmParseException("Dimension not found for connection "
-                    + connection.getRelationFromName() + " - " + connection.getRelationToName()));
-            fact.getDimensions().add(dimension);
-            dimension.setFactConnectionLabel(connection.getLabel());
-            dimensions.remove(dimension);
+                    + connection.getRelationFromName() + " - " + connection.getRelationToName())));
+            owners.put(dimension, fact);
+            fact.getDimensions().add(dimension.withFactConnection(connection));
         }
+        dimensions.removeIf(owners::containsKey);
 
         var result = new ArrayList<AbstractElement>(facts);
         result.addAll(dimensions);
@@ -205,6 +209,11 @@ final class DfmParserRun {
                 expect(TokenType.RPAREN, "Expected ')' after optional level.");
             }
             level.setLevelType(levelType);
+            if (tail != null && tail.getConnectionType() == ConnectionType.MULTIPLE
+                && !levelType.isReference() && tail.getName().equals(level.getName())) {
+                throw new DfmParseException("A recursive connection cannot be multiple.",
+                    nameToken.line, nameToken.column);
+            }
             if (levelType.isReference()) {
                 if (optional) {
                     throw new DfmParseException("A {" + marker(levelType) + "} level cannot be optional;"
@@ -245,18 +254,27 @@ final class DfmParserRun {
 
     private FactDimensionElement parseConnection() {
         var from = expectWord("Expected fact name in connection.");
+        boolean optional = accept(TokenType.LPAREN);
         var type = next();
-        if (type.type != TokenType.DASH) {
-            throw error("Expected '-' in fact-dimension connection.");
+        if (type.type != TokenType.DASH && type.type != TokenType.EQUALS) {
+            throw error("Expected '-' or '=' in fact-dimension connection.");
         }
         String label = null;
+        var relationType = parseConnectionType(type);
         if (accept(TokenType.LBRACKET)) {
             label = expectWord("Expected connection description.");
             expect(TokenType.RBRACKET, "Expected ']' after connection description.");
-            expect(TokenType.DASH, "Expected '-' after connection description.");
+            relationType = parseLabeledConnectionEnd(type);
+            if (relationType == ConnectionType.CONVERGENCE) {
+                throw error("Convergence is not a fact-dimension connection.");
+            }
+        }
+        if (optional) {
+            expect(TokenType.RPAREN, "Expected ')' after optional connection.");
         }
         var connection = new FactDimensionElement(from, expectWord("Expected dimension name in connection."));
-        connection.setRelationType(ConnectionType.SIMPLE);
+        connection.setRelationType(relationType);
+        connection.setOptional(optional);
         connection.setLabel(label);
         return connection;
     }

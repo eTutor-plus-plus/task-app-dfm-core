@@ -1,6 +1,9 @@
 package at.jku.dke.dfm.core.graph;
 
 import at.jku.dke.dfm.core.models.enums.ConnectionType;
+import at.jku.dke.dfm.core.models.ast.DimensionElement;
+import at.jku.dke.dfm.core.models.ast.Hierarchy;
+import at.jku.dke.dfm.core.models.ast.Level;
 import at.jku.dke.dfm.core.parser.DfmParser;
 import org.junit.jupiter.api.Test;
 
@@ -10,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class DfmGraphBuilderTest {
     private static DfmGraph build(String source) {
@@ -177,5 +181,43 @@ class DfmGraphBuilderTest {
         var graph = build("dimension D { a - b; a - b; };");
 
         assertEquals(1, graph.edges().size());
+    }
+
+    @Test
+    void retainsDistinctParallelEdgesButDeduplicatesRepeatedPrefixes() {
+        var graph = build("""
+            fact F { m; };
+            dimension D {
+              a -[first]- b - x;
+              a -[first]- b - y;
+              a (-[second]-) b;
+            };
+            F (-[shipping]-) D;
+            F =[billing]= D;
+            """);
+        assertEquals(1, graph.nodes().stream().filter(n -> n.label().equals("a")).count());
+        assertEquals(6, graph.edges().size());
+        var factEdges = graph.edges().stream().filter(e -> e.source().equals("fact-0")).toList();
+        assertEquals(2, factEdges.size());
+        assertEquals(factEdges.get(0).target(), factEdges.get(1).target());
+        assertTrue(factEdges.get(0).optional());
+        assertEquals(ConnectionType.MULTIPLE, factEdges.get(1).connectionType());
+        assertEquals(1, graph.edges().stream().filter(e -> "first".equals(e.label())).count());
+        assertEquals(1, graph.edges().stream().filter(e -> "second".equals(e.label())).count());
+    }
+
+    @Test
+    void rejectsProgrammaticMultipleRecursiveConnection() {
+        var dimension = new DimensionElement("D");
+        var hierarchy = new Hierarchy("");
+        var head = new Level("a", ConnectionType.MULTIPLE);
+        head.setConnectionLabel("role");
+        head.setNextLevel(new Level("a", null));
+        hierarchy.setHead(head);
+        dimension.getHierarchies().add(hierarchy);
+
+        var exception = assertThrows(IllegalArgumentException.class,
+            () -> new DfmGraphBuilder().build(List.of(dimension)));
+        assertTrue(exception.getMessage().contains("recursive connection cannot be multiple"));
     }
 }

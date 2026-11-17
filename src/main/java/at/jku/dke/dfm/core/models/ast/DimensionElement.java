@@ -1,6 +1,7 @@
 package at.jku.dke.dfm.core.models.ast;
 
 import at.jku.dke.dfm.core.models.enums.ElementType;
+import at.jku.dke.dfm.core.models.enums.ConnectionType;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -11,11 +12,22 @@ import java.util.Objects;
  * A dimension and its hierarchies.
  */
 public class DimensionElement extends AbstractElement {
-    private final List<Hierarchy> hierarchies = new ArrayList<>();
+    private final List<Hierarchy> hierarchies;
     private String factConnectionLabel;
+    private ConnectionType factConnectionType = ConnectionType.SIMPLE;
+    private boolean factConnectionOptional;
+    private final DimensionElement definition;
 
     public DimensionElement(String name) {
         super(name, ElementType.DIMENSION);
+        this.hierarchies = new ArrayList<>();
+        this.definition = this;
+    }
+
+    private DimensionElement(DimensionElement source) {
+        super(source.getName(), ElementType.DIMENSION);
+        this.hierarchies = source.hierarchies;
+        this.definition = source.definition;
     }
 
     public List<Hierarchy> getHierarchies() {
@@ -37,6 +49,32 @@ public class DimensionElement extends AbstractElement {
 
     public boolean hasSameFactConnectionLabel(DimensionElement other) {
         return other != null && Objects.equals(factConnectionLabel, other.factConnectionLabel);
+    }
+
+    public ConnectionType getFactConnectionType() {
+        return factConnectionType;
+    }
+
+    public boolean isFactConnectionOptional() {
+        return factConnectionOptional;
+    }
+
+    public boolean hasSameFactConnection(DimensionElement other) {
+        return hasSameFactConnectionLabel(other)
+            && factConnectionType == other.factConnectionType
+            && factConnectionOptional == other.factConnectionOptional;
+    }
+
+    public DimensionElement getDefinition() {
+        return definition;
+    }
+
+    public DimensionElement withFactConnection(FactDimensionElement connection) {
+        var copy = new DimensionElement(this);
+        copy.factConnectionLabel = connection.getLabel();
+        copy.factConnectionType = connection.getRelationType();
+        copy.factConnectionOptional = connection.isOptional();
+        return copy;
     }
 
     @Override

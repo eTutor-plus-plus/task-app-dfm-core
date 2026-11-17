@@ -38,7 +38,7 @@ A model is a sequence of declarations, each terminated by `;`. Keywords (`fact`,
 | Fact | `fact Name { measure; {descriptive} descriptive; ... };` | `fact Sales { profit; {descriptive} clerk; };` |
 | Dimension | `dimension Name { hierarchy; hierarchy; ... };` | `dimension Time { day - month; day - week; };` |
 | Hierarchy declaration | `hierarchy Name { chain; chain; ... };` | `hierarchy city { city - country; city - {descriptive} zipCode; };` |
-| Fact-dimension connection | `Fact - Dimension;` or `Fact -[text]- Dimension;` | `Sales -[soldat]- Time;` |
+| Fact-dimension connection | `Fact - Dimension;`, `Fact = Dimension;`, optionally in parentheses and with a description | `Sales (-[soldat]-) Time;` |
 
 Within a hierarchy, levels are chained with connections:
 
@@ -54,7 +54,9 @@ Within a hierarchy, levels are chained with connections:
 | `{cross} h` | reference to the declared hierarchy `h` (cross-dimensional attribute) |
 | `a -[text]- b` | connection with a description (also `=[text]=` and `-[text]->`; `a (-[text]-) b` if optional) |
 
-The description is a single name (letters, digits, `_`). The opening and closing connector must belong together: `-…-`, `=…=` or `-…->` between levels, and only `-…-` for fact-dimension connections. The description is drawn at the edge (for a fact-dimension connection at the edge from the fact to the first level of the dimension) and is compared like any other part of the model, so `a -[x]- b`, `a -[y]- b` and `a - b` are different.
+The description is a single name (letters, digits, `_`). The opening and closing connector must belong together: `-…-`, `=…=` or `-…->` between levels, and `-…-` or `=…=` for fact-dimension connections. Parentheses make a connection optional, e.g. `Sales (-) Time;` or `Sales (=[role]=) Time;`. The description, type and optionality are part of the connection and are compared when evaluating a fact.
+
+Several connections can refer to the same dimension of a fact, for example `Invoice -[shipping]- Customer; Invoice -[billing]- Customer;`. Distinct parallel edges are retained in the graph; exact duplicates produced by repeated hierarchy prefixes are merged.
 
 Dimensions that are not connected to a fact are kept as separate top-level elements.
 
@@ -65,10 +67,11 @@ A level may refer to itself with a role. The graph then contains a self-loop edg
 ```
 dimension SalesRepresentative {
   salesRepresentative -[supervisor]-> salesRepresentative;
+  salesRepresentative (-[alternate]-) salesRepresentative;
 };
 ```
 
-A self-reference without a role (`a - a`) is ignored.
+A self-reference without a role (`a - a`) is ignored. Recursive connections may be optional and may have distinct parallel roles, but cannot be multiple (`=`). Multiple connections between different levels remain supported.
 
 ### Shared hierarchies and cross-dimensional attributes
 

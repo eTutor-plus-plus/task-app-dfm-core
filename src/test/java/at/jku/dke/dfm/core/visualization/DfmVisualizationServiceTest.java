@@ -74,6 +74,28 @@ class DfmVisualizationServiceTest {
     }
 
     @Test
+    void rendersParallelConnectionsAsDistinctCurves() {
+        var svg = render("fact F { m; }; dimension D { d; }; F (-[shipping]-) D; F =[billing]= D;");
+        var paths = java.util.regex.Pattern.compile("<path class=\"edge\" d=\"([^\"]+)\"")
+            .matcher(svg).results().map(match -> match.group(1)).toList();
+        assertEquals(3, paths.size());
+        assertEquals(3, new java.util.HashSet<>(paths).size());
+        assertTrue(paths.stream().allMatch(path -> path.contains(" Q ")));
+        assertTrue(svg.contains(">shipping</text>"));
+        assertTrue(svg.contains(">billing</text>"));
+    }
+
+    @Test
+    void rendersOptionalRecursiveConnection() {
+        var svg = render("dimension D { a (-[role]->) a; };");
+        var paths = java.util.regex.Pattern.compile("<path class=\"edge\" d=\"([^\"]+)\"")
+            .matcher(svg).results().map(match -> match.group(1)).toList();
+        assertEquals(1, paths.size());
+        assertTrue(svg.contains("class=\"optional-edge-marker\""));
+        assertTrue(svg.contains(">role</text>"));
+    }
+
+    @Test
     void edgeLabelLiesOnTheEdgeButKeepsItsMiddleFree() {
         var pattern = java.util.regex.Pattern.compile("<circle cx=\"([\\d.\\-]+)\" cy=\"([\\d.\\-]+)\"");
         for (var source : List.of(
