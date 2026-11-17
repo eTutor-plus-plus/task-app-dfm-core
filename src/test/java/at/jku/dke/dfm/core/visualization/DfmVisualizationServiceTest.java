@@ -2,139 +2,136 @@ package at.jku.dke.dfm.core.visualization;
 
 import at.jku.dke.dfm.core.models.ast.FactElement;
 import at.jku.dke.dfm.core.parser.DfmParser;
+import at.jku.dke.dfm.core.visualization.DfmCanvas.RuleColor;
+import at.jku.dke.dfm.core.visualization.DfmCanvas.TextStyle;
 import org.junit.jupiter.api.Test;
 
+import javax.imageio.ImageIO;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.util.HashSet;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DfmVisualizationServiceTest {
+    private static final byte[] PNG_SIGNATURE = {(byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+
     @Test
     void rendersSharedHierarchyEntryAsDoubleCircle() {
-        var svg = render("hierarchy h { a - b; }; dimension d { x - {shared} h; y - {shared} h; };");
+        var canvas = draw("hierarchy h { a - b; }; dimension d { x - {shared} h; y - {shared} h; };");
 
-        assertEquals(5,  svg.split("<circle", -1).length - 1);
-        assertTrue(svg.contains("r=\"14.0\""));
-        assertFalse(svg.contains(" A 14.0 14.0 "));
-        assertTrue(svg.contains(">a</text>"));
+        assertEquals(5, canvas.circles.size());
+        assertTrue(canvas.circles.stream().anyMatch(circle -> circle.radius() == 14.0 && !circle.filled()));
+        assertTrue(canvas.arcs.isEmpty());
+        assertTrue(canvas.hasText("a"));
     }
 
     @Test
     void rendersCrossAttributeAsCircleWithArc() {
-        var svg = render("hierarchy h { a; }; dimension d { x - {cross} h; y - {cross} h; };");
+        var canvas = draw("hierarchy h { a; }; dimension d { x - {cross} h; y - {cross} h; };");
 
-        assertEquals(3,  svg.split("<circle", -1).length - 1);
-        assertEquals(1, svg.split(" A 14.0 14.0 ", -1).length - 1);
+        assertEquals(3, canvas.circles.size());
+        assertEquals(1, canvas.arcs.size());
+        assertEquals(14.0, canvas.arcs.get(0).radius());
+        assertTrue(canvas.arcs.get(0).extent() < 0);
     }
 
     @Test
     void rendersModelWithSharedAndCrossHierarchies() {
-        var svg = render("fact Sales { profit; }; hierarchy VAT { VAT - vatClass; };"
+        var canvas = draw("fact Sales { profit; }; hierarchy VAT { VAT - vatClass; };"
             + " hierarchy city { city - country - {cross} VAT; city = region; };"
             + " dimension city { {shared} city; }; dimension product { product - category - {cross} VAT; };"
             + " dimension customer { customer -[customerCity]- {shared} city; };"
             + " Sales -[storeCity]- city; Sales - customer; Sales - product;");
 
-        assertTrue(svg.endsWith("</svg>"));
-        assertTrue(svg.contains(">VAT</text>"));
-        assertTrue(svg.contains(">storeCity</text>"));
+        assertTrue(canvas.hasText("VAT"));
+        assertTrue(canvas.hasText("storeCity"));
     }
 
     @Test
-    void rendersEscapedDfmNamesAsSvg() {
-        var elements = new DfmParser().parse("fact Sales { profit; };");
-        var svg = new DfmVisualizationService().render(elements);
+    void rendersFactNameAndMeasures() {
+        var canvas = draw("fact Sales { profit; };");
 
-        assertTrue(svg.startsWith("<svg "));
-        assertTrue(svg.contains("Sales"));
-        assertTrue(svg.endsWith("</svg>"));
+        assertEquals(1, canvas.factBoxes.size());
+        assertEquals("Sales", canvas.texts(TextStyle.FACT_TITLE).get(0).text());
+        assertEquals("profit", canvas.texts(TextStyle.FACT_DETAIL).get(0).text());
     }
 
     @Test
     void rendersAllHierarchyLevelsAsConnectedNodes() {
-        var elements = new DfmParser().parse(
-            "fact Sales { profit; }; dimension Time { day - month - quarter - year; }; Sales - Time;");
-        var svg = new DfmVisualizationService().render(elements);
+        var canvas = draw("fact Sales { profit; }; dimension Time { day - month - quarter - year; }; Sales - Time;");
 
-        assertTrue(svg.contains("<circle"));
-        assertTrue(svg.contains(">day</text>"));
-        assertTrue(svg.contains(">month</text>"));
-        assertTrue(svg.contains(">quarter</text>"));
-        assertTrue(svg.contains(">year</text>"));
-        assertTrue(svg.contains("class=\"edge\""));
+        assertEquals(4, canvas.levelCircles().size());
+        for (var level : List.of("day", "month", "quarter", "year")) {
+            assertTrue(canvas.hasText(level), level);
+        }
+        assertEquals(4, canvas.lines.size());
     }
 
     @Test
     void rendersConnectionLabelsAsEdgeText() {
-        var svg = render("fact Sales { profit; }; dimension D { a -[a_to_b]- b; }; Sales - D;");
+        var canvas = draw("fact Sales { profit; }; dimension D { a -[a_to_b]- b; }; Sales - D;");
 
-        assertTrue(svg.contains("class=\"edge-label\""));
-        assertTrue(svg.contains(">a_to_b</text>"));
+        assertEquals("a_to_b", canvas.texts(TextStyle.EDGE_LABEL).get(0).text());
     }
 
     @Test
     void rendersParallelConnectionsAsDistinctCurves() {
-        var svg = render("fact F { m; }; dimension D { d; }; F (-[shipping]-) D; F =[billing]= D;");
-        var paths = java.util.regex.Pattern.compile("<path class=\"edge\" d=\"([^\"]+)\"")
-            .matcher(svg).results().map(match -> match.group(1)).toList();
-        assertEquals(3, paths.size());
-        assertEquals(3, new java.util.HashSet<>(paths).size());
-        assertTrue(paths.stream().allMatch(path -> path.contains(" Q ")));
-        assertTrue(svg.contains(">shipping</text>"));
-        assertTrue(svg.contains(">billing</text>"));
+        var canvas = draw("fact F { m; }; dimension D { d; }; F (-[shipping]-) D; F =[billing]= D;");
+
+        assertEquals(3, canvas.quads.size());
+        assertEquals(3, new HashSet<>(canvas.quads).size());
+        assertTrue(canvas.hasText("shipping"));
+        assertTrue(canvas.hasText("billing"));
     }
 
     @Test
     void rendersOptionalRecursiveConnection() {
-        var svg = render("dimension D { a (-[role]->) a; };");
-        var paths = java.util.regex.Pattern.compile("<path class=\"edge\" d=\"([^\"]+)\"")
-            .matcher(svg).results().map(match -> match.group(1)).toList();
-        assertEquals(1, paths.size());
-        assertTrue(svg.contains("class=\"optional-edge-marker\""));
-        assertTrue(svg.contains(">role</text>"));
+        var canvas = draw("dimension D { a (-[role]->) a; };");
+
+        assertEquals(1, canvas.cubics.size());
+        assertEquals(1, canvas.markers.size());
+        assertTrue(canvas.hasText("role"));
     }
 
     @Test
     void edgeLabelLiesOnTheEdgeButKeepsItsMiddleFree() {
-        var pattern = java.util.regex.Pattern.compile("<circle cx=\"([\\d.\\-]+)\" cy=\"([\\d.\\-]+)\"");
         for (var source : List.of(
             "fact S { m; }; dimension D { a (-[longerlabel]-) b; }; S - D;",
             "fact S { m; }; dimension D { a (-[x]-) b; a - c; a - d; a - e; }; S - D;",
             "fact S { m; }; dimension D { a (-[described_connection]-) b - c - d; }; S - D;")) {
-            var svg = render(source);
-            var circles = pattern.matcher(svg).results()
-                .map(match -> new double[]{Double.parseDouble(match.group(1)), Double.parseDouble(match.group(2))})
-                .toList();
-            var text = java.util.regex.Pattern.compile(
-                "class=\"edge-label\" text-anchor=\"middle\" x=\"([\\d.\\-]+)\" y=\"([\\d.\\-]+)\">([^<]*)<")
-                .matcher(svg);
-            assertTrue(text.find());
-            double labelX = Double.parseDouble(text.group(1));
-            double labelY = Double.parseDouble(text.group(2)) - 4;
-            double halfWidth = text.group(3).length() * 7 / 2;
+            var canvas = draw(source);
+            var circles = canvas.levelCircles();
+            var text = canvas.texts(TextStyle.EDGE_LABEL).get(0);
+            double labelX = text.x();
+            double labelY = text.y() - 4;
+            double halfWidth = text.text().length() * 7 / 2.0;
             var from = circles.get(0);
             var to = circles.get(1);
-            double length = Math.hypot(to[0] - from[0], to[1] - from[1]);
-            double normalX = -(to[1] - from[1]) / length;
-            double normalY = (to[0] - from[0]) / length;
-            double middleX = (from[0] + to[0]) / 2;
-            double middleY = (from[1] + to[1]) / 2;
+            double length = Math.hypot(to.cx() - from.cx(), to.cy() - from.cy());
+            double normalX = -(to.cy() - from.cy()) / length;
+            double normalY = (to.cx() - from.cx()) / length;
+            double middleX = (from.cx() + to.cx()) / 2;
+            double middleY = (from.cy() + to.cy()) / 2;
 
             for (int i = -5; i <= 5; i++) {
                 assertFalse(insideLabel(middleX + normalX * i, middleY + normalY * i, labelX, labelY, halfWidth),
                     source);
             }
             assertFalse(insideLabel(middleX, middleY, labelX, labelY, halfWidth), source);
-            double distanceToLine = Math.abs((labelX - from[0]) * normalX + (labelY - from[1]) * normalY);
+            double distanceToLine = Math.abs((labelX - from.cx()) * normalX + (labelY - from.cy()) * normalY);
             boolean onEdge = distanceToLine < 1;
             if (!onEdge) {
                 // too short for the label: it has to stay clear of the whole edge
                 for (int i = 0; i <= 100; i++) {
                     double t = i / 100.0;
-                    assertFalse(insideLabel(from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t,
-                        labelX, labelY, halfWidth), source);
+                    assertFalse(insideLabel(from.cx() + (to.cx() - from.cx()) * t,
+                        from.cy() + (to.cy() - from.cy()) * t, labelX, labelY, halfWidth), source);
                 }
             }
             if (source.contains("longerlabel")) {
@@ -149,156 +146,170 @@ class DfmVisualizationServiceTest {
 
     @Test
     void edgeLabelIsCenteredOnPlainEdges() {
-        var circles = java.util.regex.Pattern.compile("<circle cx=\"([\\d.\\-]+)\" cy=\"([\\d.\\-]+)\"")
-            .matcher(render("fact S { m; }; dimension D { a -[plain]- b; }; S - D;"))
-            .results().map(match -> new double[]{Double.parseDouble(match.group(1)),
-                Double.parseDouble(match.group(2))}).toList();
-        var svg = render("fact S { m; }; dimension D { a -[plain]- b; }; S - D;");
-        var text = java.util.regex.Pattern.compile(
-            "class=\"edge-label\" text-anchor=\"middle\" x=\"([\\d.\\-]+)\" y=\"([\\d.\\-]+)\"").matcher(svg);
-        assertTrue(text.find());
+        var canvas = draw("fact S { m; }; dimension D { a -[plain]- b; }; S - D;");
+        var circles = canvas.levelCircles();
+        var text = canvas.texts(TextStyle.EDGE_LABEL).get(0);
 
-        assertEquals((circles.get(0)[0] + circles.get(1)[0]) / 2, Double.parseDouble(text.group(1)), 0.2);
-        assertEquals((circles.get(0)[1] + circles.get(1)[1]) / 2 + 4, Double.parseDouble(text.group(2)), 0.2);
+        assertEquals((circles.get(0).cx() + circles.get(1).cx()) / 2, text.x(), 0.2);
+        assertEquals((circles.get(0).cy() + circles.get(1).cy()) / 2 + 4, text.y(), 0.2);
     }
 
     @Test
     void factEdgeLabelStaysOutsideTheFactBox() {
-        var svg = render("fact S { m; }; dimension D { a - b; }; S -[uses]- D;");
-        var box = java.util.regex.Pattern.compile(
-            "<rect x=\"([\\d.\\-]+)\" y=\"([\\d.\\-]+)\" width=\"([\\d.\\-]+)\" height=\"([\\d.\\-]+)\"").matcher(svg);
-        var text = java.util.regex.Pattern.compile(
-            "class=\"edge-label\" text-anchor=\"middle\" x=\"([\\d.\\-]+)\" y=\"([\\d.\\-]+)\"").matcher(svg);
-        assertTrue(box.find());
-        assertTrue(text.find());
+        var canvas = draw("fact S { m; }; dimension D { a - b; }; S -[uses]- D;");
+        var box = canvas.factBoxes.get(0);
+        var text = canvas.texts(TextStyle.EDGE_LABEL).get(0);
 
-        double x = Double.parseDouble(text.group(1));
-        double y = Double.parseDouble(text.group(2)) - 4;
+        double x = text.x();
+        double y = text.y() - 4;
         double halfWidth = "uses".length() * 7 / 2.0;
-        double left = Double.parseDouble(box.group(1));
-        double top = Double.parseDouble(box.group(2));
-        double right = left + Double.parseDouble(box.group(3));
-        double bottom = top + Double.parseDouble(box.group(4));
-        boolean overlaps = x + halfWidth > left && x - halfWidth < right && y + 7 > top && y - 7 < bottom;
+        boolean overlaps = x + halfWidth > box.x() && x - halfWidth < box.x() + box.width()
+            && y + 7 > box.y() && y - 7 < box.y() + box.height();
         assertFalse(overlaps);
     }
 
     @Test
     void shortEdgesPlaceTheLabelBesideTheEdge() {
-        var svg = render("fact S { m; }; dimension D { a (-[a_rather_long_description_text]-) b; }; S - D;");
+        var canvas = draw("fact S { m; }; dimension D { a (-[a_rather_long_description_text]-) b; }; S - D;");
 
-        assertTrue(svg.contains(">a_rather_long_description_text</text>"));
+        assertTrue(canvas.hasText("a_rather_long_description_text"));
     }
 
     @Test
     void rendersNoEdgeLabelsWithoutDescriptions() {
-        var svg = render("fact Sales { profit; }; dimension D { a - b; }; Sales - D;");
+        var canvas = draw("fact Sales { profit; }; dimension D { a - b; }; Sales - D;");
 
-        assertFalse(svg.contains("class=\"edge-label\" "));
+        assertTrue(canvas.texts(TextStyle.EDGE_LABEL).isEmpty());
     }
 
     @Test
-    void rendersConvergenceWithArrowMarker() {
-        var svg = render("fact Sales { profit; }; dimension D { a -> b; }; Sales - D;");
-
-        assertTrue(svg.contains("marker-end=\"url(#arrow)\""));
+    void rendersConvergenceWithArrow() {
+        assertTrue(draw("fact Sales { profit; }; dimension D { a -> b; }; Sales - D;").hasArrow());
+        assertFalse(draw("fact Sales { profit; }; dimension D { a - b; }; Sales - D;").hasArrow());
     }
 
     @Test
     void rendersRecursiveHierarchyAsSelfLoopWithRole() {
-        var svg = render("fact Sales { profit; }; "
+        var canvas = draw("fact Sales { profit; }; "
             + "dimension SalesRepresentative { salesRepresentative -[supervisor]-> salesRepresentative; }; "
             + "Sales - SalesRepresentative;");
 
-        assertEquals(1, count(svg, "<path class=\"edge\" d=\"M "));
-        assertEquals(1, count(svg, ">supervisor</text>"));
-        assertEquals(1, count(svg, "<circle"));
-        assertTrue(svg.contains("marker-end=\"url(#arrow)\""));
+        assertEquals(1, canvas.cubics.size());
+        assertEquals(1, canvas.texts(TextStyle.EDGE_LABEL).size());
+        assertEquals("supervisor", canvas.texts(TextStyle.EDGE_LABEL).get(0).text());
+        assertEquals(1, canvas.levelCircles().size());
+        assertTrue(canvas.cubics.get(0).arrow());
     }
 
     @Test
     void rendersNoLoopForSelfReferenceWithoutRole() {
-        var svg = render("dimension D { a - a; };");
-
-        assertFalse(svg.contains("<path class=\"edge\""));
+        assertTrue(draw("dimension D { a - a; };").cubics.isEmpty());
     }
 
     @Test
     void rendersMultipleConnectionAsTwoLines() {
-        var simple = render("fact Sales { profit; }; dimension D { a - b; }; Sales - D;");
-        var multiple = render("fact Sales { profit; }; dimension D { a = b; }; Sales - D;");
+        var simple = draw("fact Sales { profit; }; dimension D { a - b; }; Sales - D;");
+        var multiple = draw("fact Sales { profit; }; dimension D { a = b; }; Sales - D;");
 
-        assertEquals(count(simple, "<line class=\"edge\"") + 1, count(multiple, "<line class=\"edge\""));
+        assertEquals(simple.lines.size() + 1, multiple.lines.size());
     }
 
     @Test
     void rendersOptionalLevelAndConnectionMarkers() {
-        var plain = render("fact Sales { profit; }; dimension D { a - b; }; Sales - D;");
-        var optionalLevel = render("fact Sales { profit; }; dimension D { a - (b); }; Sales - D;");
-        var optionalConnection = render("fact Sales { profit; }; dimension D { a (-) b; }; Sales - D;");
+        var plain = draw("fact Sales { profit; }; dimension D { a - b; }; Sales - D;");
+        var optionalLevel = draw("fact Sales { profit; }; dimension D { a - (b); }; Sales - D;");
+        var optionalConnection = draw("fact Sales { profit; }; dimension D { a (-) b; }; Sales - D;");
 
-        assertEquals(count(plain, "<line") + 1, count(optionalLevel, "<line"));
-        assertEquals(count(plain, "<line") + 1, count(optionalConnection, "<line"));
+        assertEquals(plain.lineCount() + 1, optionalLevel.lineCount());
+        assertEquals(plain.lineCount() + 1, optionalConnection.lineCount());
+        assertEquals(1, optionalConnection.markers.size());
+        assertTrue(optionalLevel.rules.stream().anyMatch(rule -> rule.color() == RuleColor.BLACK));
     }
 
     @Test
-    void escapesSpecialCharactersInLabels() {
+    void rendersSpecialCharactersInLabelsUnchanged() {
         var fact = new FactElement("A&B<\"'>");
         fact.getMeasures().add("m&m");
-        var svg = new DfmVisualizationService().render(List.of(fact));
+        var canvas = new RecordingCanvas();
+        new DfmVisualizationService().draw(List.of(fact), canvas);
 
-        assertTrue(svg.contains("A&amp;B&lt;&quot;&apos;&gt;"));
-        assertTrue(svg.contains(">m&amp;m</text>"));
-        assertFalse(svg.contains("A&B"));
+        assertTrue(canvas.hasText("A&B<\"'>"));
+        assertTrue(canvas.hasText("m&m"));
+        assertValidPng(new DfmVisualizationService().renderPng(List.of(fact)));
     }
 
     @Test
-    void rendersEmptyModelAsValidSvg() {
-        var svg = new DfmVisualizationService().render(List.of());
+    void rendersEmptyModelAsValidPng() throws IOException {
+        var image = ImageIO.read(new ByteArrayInputStream(new DfmVisualizationService().renderPng(List.of())));
 
-        assertTrue(svg.startsWith("<svg "));
-        assertTrue(svg.endsWith("</svg>"));
+        assertEquals(1400, image.getWidth());
+        assertEquals(1000, image.getHeight());
     }
 
     @Test
     void rendersUnconnectedDimensions() {
-        var svg = render("dimension D { a - b; };");
+        var canvas = draw("dimension D { a - b; };");
 
-        assertTrue(svg.contains(">a</text>"));
-        assertTrue(svg.contains(">b</text>"));
+        assertTrue(canvas.hasText("a"));
+        assertTrue(canvas.hasText("b"));
     }
 
     @Test
     void rendersOnlyFirstHierarchyHeadConnectedToFact() {
-        var svg = render("fact Sales { profit; }; dimension D { a - b; c - d; }; Sales - D;");
-        var singleHierarchy = render("fact Sales { profit; }; dimension D { a - b; }; Sales - D;");
+        var canvas = draw("fact Sales { profit; }; dimension D { a - b; c - d; }; Sales - D;");
+        var singleHierarchy = draw("fact Sales { profit; }; dimension D { a - b; }; Sales - D;");
 
         // the only additional edge is c - d; no edge from the fact to c
-        assertEquals(count(singleHierarchy, "<line class=\"edge\"") + 1, count(svg, "<line class=\"edge\""));
+        assertEquals(singleHierarchy.lines.size() + 1, canvas.lines.size());
     }
 
     @Test
     void rendersDeterministicOutput() {
         var source = "fact Sales { profit; }; dimension D { a - b - c; }; Sales - D;";
+        var elements = new DfmParser().parse(source);
+        var service = new DfmVisualizationService();
 
-        assertEquals(render(source), render(source));
-    }
-
-    private static String render(String source) {
-        return new DfmVisualizationService().render(new DfmParser().parse(source));
-    }
-
-    private static long count(String text, String token) {
-        return text.split(java.util.regex.Pattern.quote(token), -1).length - 1;
+        assertEquals(draw(source).texts, draw(source).texts);
+        assertEquals(draw(source).lines, draw(source).lines);
+        assertArrayEquals(service.renderPng(elements), service.renderPng(elements));
     }
 
     @Test
     void rendersDescriptivesOutsideTheFactNode() {
-        var elements = new DfmParser().parse("fact Sales { profit; {descriptive} accountHandler; };");
-        var svg = new DfmVisualizationService().render(elements);
+        var canvas = draw("fact Sales { profit; {descriptive} accountHandler; };");
 
-        assertTrue(svg.contains("class=\"descriptive\""));
-        assertTrue(svg.contains(">accountHandler</text>"));
-        assertTrue(!svg.contains("class=\"fact-detail\" x=\"637.0\" y=\"515.0\">accountHandler"));
+        assertEquals("accountHandler", canvas.texts(TextStyle.DESCRIPTIVE).get(0).text());
+        assertTrue(canvas.texts(TextStyle.FACT_DETAIL).stream().noneMatch(text -> text.text().equals("accountHandler")));
+    }
+
+    @Test
+    void rendersPngWithVisibleContent() throws IOException {
+        var png = new DfmVisualizationService().renderPng(
+            new DfmParser().parse("fact Sales { profit; }; dimension Time { day - month; }; Sales - Time;"));
+        assertValidPng(png);
+
+        var image = ImageIO.read(new ByteArrayInputStream(png));
+        assertNotNull(image);
+        boolean hasContent = false;
+        for (int y = 0; y < image.getHeight() && !hasContent; y++) {
+            for (int x = 0; x < image.getWidth(); x++) {
+                if ((image.getRGB(x, y) & 0xFFFFFF) != 0xFFFFFF) {
+                    hasContent = true;
+                    break;
+                }
+            }
+        }
+        assertTrue(hasContent);
+    }
+
+    private static void assertValidPng(byte[] png) {
+        assertTrue(png.length > PNG_SIGNATURE.length);
+        assertArrayEquals(PNG_SIGNATURE, java.util.Arrays.copyOf(png, PNG_SIGNATURE.length));
+    }
+
+    private static RecordingCanvas draw(String source) {
+        var canvas = new RecordingCanvas();
+        new DfmVisualizationService().draw(new DfmParser().parse(source), canvas);
+        return canvas;
     }
 }

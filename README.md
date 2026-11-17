@@ -2,7 +2,7 @@
 
 Reusable Java library for parsing, modeling, and visualizing Dimensional Fact Models (DFM).
 
-The library contains the DFM abstract syntax tree, parser, and SVG renderer. It has no Spring or database dependency and can be used by task applications, editors, and other DFM tools.
+The library contains the DFM abstract syntax tree, parser, and PNG renderer. It has no Spring or database dependency and can be used by task applications, editors, and other DFM tools.
 
 ## Requirements
 
@@ -24,7 +24,7 @@ var elements = new DfmParser().parse("""
     Sales - Time;
     """);
 
-var svg = new DfmVisualizationService().render(elements);
+var png = new DfmVisualizationService().renderPng(elements);
 ```
 
 The public classes are in the `at.jku.dke.dfm.core` package hierarchy. The Maven coordinates are `at.jku.dke.etutor:task-app-dfm-core`.
@@ -135,7 +135,7 @@ Invalid input results in a `DfmParseException` carrying the 1-based `getLine()` 
 var graph = new DfmGraphBuilder().build(elements);
 ```
 
-`DfmVisualizationService` is a static renderer built on this graph with its own layout. It produces a self-contained SVG, e.g. for feedback in systems that cannot run JavaScript. Interactive front ends (such as the DFM editor) should use the `DfmGraph` and do their own layout and drawing.
+`DfmVisualizationService` is a static renderer built on this graph with its own layout. `renderPng(...)` returns a PNG (1400 × 1000 px, as `byte[]`) drawn with Java2D, e.g. for feedback in systems that cannot run JavaScript; there is no SVG output. Java2D needs the `java.desktop` module and a font for text rendering: on servers without a display, start the JVM with `-Djava.awt.headless=true`, and install a font package (e.g. `fontconfig` and `fonts-dejavu-core`) if the base image does not provide one. Interactive front ends (such as the DFM editor) should use the `DfmGraph` and do their own layout and drawing.
 
 ## Publish
 

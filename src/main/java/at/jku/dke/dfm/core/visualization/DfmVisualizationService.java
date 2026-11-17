@@ -5,12 +5,18 @@ import at.jku.dke.dfm.core.graph.NodeKind;
 import at.jku.dke.dfm.core.models.ast.AbstractElement;
 import at.jku.dke.dfm.core.models.enums.ConnectionType;
 
+import javax.imageio.ImageIO;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 
 /**
- * Creates a graph-style SVG overview of a parsed DFM.
+ * Creates a graph-style PNG overview of a parsed DFM using Java2D.
+ * <p>
+ * Text rendering needs fonts; on servers without a display, run the JVM with {@code -Djava.awt.headless=true}.
  */
 public class DfmVisualizationService {
     private static final int WIDTH = 1400;
@@ -30,34 +36,41 @@ public class DfmVisualizationService {
     private static final double SELF_LOOP_HALF_GAP = 6;
     private static final double SELF_LOOP_MAX_CLEARANCE = Math.toRadians(70);
 
-    public String render(List<AbstractElement> elements) {
+    /**
+     * Renders the model as a PNG image.
+     *
+     * @param elements the parsed DFM elements
+     * @return the PNG file content
+     * @throws UncheckedIOException if encoding the image fails
+     */
+    public byte[] renderPng(List<AbstractElement> elements) {
+        var canvas = new Java2dCanvas(WIDTH, HEIGHT);
+        draw(elements, canvas);
+        try (var output = new ByteArrayOutputStream()) {
+            if (!ImageIO.write(canvas.finish(), "png", output)) {
+                throw new IllegalStateException("No PNG writer available.");
+            }
+            return output.toByteArray();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    void draw(List<AbstractElement> elements, DfmCanvas canvas) {
         var graph = createGraph(elements);
         layout(graph.nodes(), graph.links());
-        var svg = new StringBuilder()
-            .append("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"")
-            .append(WIDTH).append("\" height=\"").append(HEIGHT)
-            .append("\" viewBox=\"0 0 ").append(WIDTH).append(" ").append(HEIGHT).append("\">")
-            .append("<style>text{font:16px serif}.fact-title{font-weight:bold;fill:#00e}")
-            .append(".fact-detail{fill:#666;font-size:14px}.descriptive{fill:#000}")
-            .append(".edge,.optional-edge-marker{stroke:#999;stroke-width:1;fill:none}")
-            .append(".edge-label{font-size:13px;fill:#333;stroke:#fff;stroke-width:3px;paint-order:stroke}</style>")
-            .append("<defs><marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"8\" refY=\"5\"")
-            .append(" markerWidth=\"7\" markerHeight=\"7\" orient=\"auto-start-reverse\">")
-            .append("<path d=\"M 0 0 L 10 5 L 0 10 z\" fill=\"#222\"/></marker></defs>");
-
         for (var link : graph.links()) {
             if (link.source() == link.target()) {
-                appendSelfLoop(svg, link, graph.links());
+                appendSelfLoop(canvas, link, graph.links());
             } else if (parallelLinks(link, graph.links()).size() > 1) {
-                appendParallelLink(svg, link, graph.links());
+                appendParallelLink(canvas, link, graph.links());
             } else {
-                appendLink(svg, link);
+                appendLink(canvas, link);
             }
         }
         for (var node : graph.nodes()) {
-            appendNode(svg, node);
+            appendNode(canvas, node);
         }
-        return svg.append("</svg>").toString();
     }
 
     private Graph createGraph(List<AbstractElement> elements) {
@@ -171,7 +184,7 @@ public class DfmVisualizationService {
         return Math.max(min, Math.min(max, value));
     }
 
-    private void appendLink(StringBuilder svg, Link link) {
+    private void appendLink(DfmCanvas canvas, Link link) {
         double dx = link.target().x - link.source().x;
         double dy = link.target().y - link.source().y;
         double distance = Math.max(1, Math.sqrt(dx * dx + dy * dy));
@@ -184,27 +197,25 @@ public class DfmVisualizationService {
             endX = (link.source().x + link.target().x) / 2;
             endY = (link.source().y + link.target().y) / 2;
         }
-        appendLine(svg, link.source().x + offsetX, link.source().y + offsetY,
+        canvas.edgeLine(link.source().x + offsetX, link.source().y + offsetY,
             endX + offsetX, endY + offsetY, link.connectionType() == ConnectionType.CONVERGENCE);
         if (link.connectionType() == ConnectionType.CONVERGENCE) {
-            appendLine(svg, endX, endY, link.target().x, link.target().y, false);
+            canvas.edgeLine(endX, endY, link.target().x, link.target().y, false);
         }
         if (link.connectionType() == ConnectionType.MULTIPLE) {
-            svg.append("<line class=\"edge\" x1=\"").append(format(link.source().x - offsetX))
-                .append("\" y1=\"").append(format(link.source().y - offsetY)).append("\" x2=\"")
-                .append(format(link.target().x - offsetX)).append("\" y2=\"")
-                .append(format(link.target().y - offsetY)).append("\"/>");
+            canvas.edgeLine(link.source().x - offsetX, link.source().y - offsetY,
+                link.target().x - offsetX, link.target().y - offsetY, false);
         }
         if (link.optional()) {
             double middleX = (link.source().x + link.target().x) / 2;
             double middleY = (link.source().y + link.target().y) / 2;
             double perpendicularX = -dy / distance * 5;
             double perpendicularY = dx / distance * 5;
-            appendLine(svg, middleX - perpendicularX, middleY - perpendicularY,
-                middleX + perpendicularX, middleY + perpendicularY, false);
+            canvas.optionalMarker(middleX - perpendicularX, middleY - perpendicularY,
+                middleX + perpendicularX, middleY + perpendicularY);
         }
         if (link.label() != null) {
-            appendLinkLabel(svg, link, dx, dy, distance, 0);
+            appendLinkLabel(canvas, link, dx, dy, distance, 0);
         }
     }
 
@@ -213,7 +224,7 @@ public class DfmVisualizationService {
             .toList();
     }
 
-    private void appendParallelLink(StringBuilder svg, Link link, List<Link> links) {
+    private void appendParallelLink(DfmCanvas canvas, Link link, List<Link> links) {
         var parallel = parallelLinks(link, links);
         double spacing = Math.max(50, parallel.stream().filter(other -> other.label() != null)
             .mapToInt(other -> other.label().length()).max().orElse(0) * 7 + 16);
@@ -231,37 +242,26 @@ public class DfmVisualizationService {
             if (link.connectionType() == ConnectionType.CONVERGENCE) {
                 double mx = (link.source().x + 2 * cx + link.target().x) / 4;
                 double my = (link.source().y + 2 * cy + link.target().y) / 4;
-                appendQuadratic(svg, link.source().x, link.source().y,
+                canvas.edgeQuad(link.source().x, link.source().y,
                     (link.source().x + cx) / 2, (link.source().y + cy) / 2, mx, my, true);
-                appendQuadratic(svg, mx, my, (link.target().x + cx) / 2, (link.target().y + cy) / 2,
+                canvas.edgeQuad(mx, my, (link.target().x + cx) / 2, (link.target().y + cy) / 2,
                     link.target().x, link.target().y, false);
             } else {
-                appendQuadratic(svg, link.source().x, link.source().y, cx, cy,
+                canvas.edgeQuad(link.source().x, link.source().y, cx, cy,
                     link.target().x, link.target().y, false);
             }
         }
         double mx = (link.source().x + link.target().x) / 2 + nx * offset;
         double my = (link.source().y + link.target().y) / 2 + ny * offset;
         if (link.optional()) {
-            appendLine(svg, mx - nx * 5, my - ny * 5, mx + nx * 5, my + ny * 5, false);
+            canvas.optionalMarker(mx - nx * 5, my - ny * 5, mx + nx * 5, my + ny * 5);
         }
         if (link.label() != null) {
-            appendLinkLabel(svg, link, dx, dy, distance, offset);
+            appendLinkLabel(canvas, link, dx, dy, distance, offset);
         }
     }
 
-    private void appendQuadratic(StringBuilder svg, double x1, double y1, double cx, double cy,
-                                 double x2, double y2, boolean arrow) {
-        svg.append("<path class=\"edge\" d=\"M ").append(format(x1)).append(' ').append(format(y1))
-            .append(" Q ").append(format(cx)).append(' ').append(format(cy)).append(' ')
-            .append(format(x2)).append(' ').append(format(y2)).append('"');
-        if (arrow) {
-            svg.append(" marker-end=\"url(#arrow)\"");
-        }
-        svg.append("/>");
-    }
-
-    private void appendSelfLoop(StringBuilder svg, Link link, List<Link> links) {
+    private void appendSelfLoop(DfmCanvas canvas, Link link, List<Link> links) {
         var node = link.source();
 
         // the loop points upwards (node names hang below the nodes) and as far away from the connected edges
@@ -300,16 +300,13 @@ public class DfmVisualizationService {
         var parallel = parallelLinks(link, links);
         int loopIndex = parallel.indexOf(link);
         double controlAlong = LEVEL_RADIUS + SELF_LOOP_HEIGHT + loopIndex * 40;
-        appendSelfLoopPath(svg, node, dirX, dirY, perpX, perpY, startAlong, controlAlong,
+        appendSelfLoopPath(canvas, node, dirX, dirY, perpX, perpY, startAlong, controlAlong,
             link.connectionType() == ConnectionType.CONVERGENCE);
 
         double tip = 0.75 * controlAlong + 0.25 * startAlong;
         if (link.optional()) {
-            svg.append("<line class=\"optional-edge-marker\" x1=\"")
-                .append(format(node.x + dirX * (tip - 5))).append("\" y1=\"")
-                .append(format(node.y + dirY * (tip - 5))).append("\" x2=\"")
-                .append(format(node.x + dirX * (tip + 5))).append("\" y2=\"")
-                .append(format(node.y + dirY * (tip + 5))).append("\"/>");
+            canvas.optionalMarker(node.x + dirX * (tip - 5), node.y + dirY * (tip - 5),
+                node.x + dirX * (tip + 5), node.y + dirY * (tip + 5));
         }
         if (link.label() != null) {
             double halfWidth = link.label().length() * 7 / 2;
@@ -327,32 +324,25 @@ public class DfmVisualizationService {
                 labelX = outerLeft - halfWidth - LABEL_MARGIN;
                 labelY = node.y + dirY * tip;
             }
-            svg.append("<text class=\"edge-label\" text-anchor=\"middle\" x=\"")
-                .append(format(labelX)).append("\" y=\"")
-                .append(format(labelY + 4)).append("\">")
-                .append(escape(link.label())).append("</text>");
+            canvas.text(labelX, labelY + 4, link.label(), DfmCanvas.TextStyle.EDGE_LABEL);
         }
     }
 
-    private void appendSelfLoopPath(StringBuilder svg, Node node, double dirX, double dirY, double perpX,
+    private void appendSelfLoopPath(DfmCanvas canvas, Node node, double dirX, double dirY, double perpX,
                                     double perpY, double startAlong, double controlAlong, boolean arrow) {
-        svg.append("<path class=\"edge\" d=\"M ")
-            .append(format(node.x - perpX * SELF_LOOP_HALF_GAP + dirX * startAlong)).append(' ')
-            .append(format(node.y - perpY * SELF_LOOP_HALF_GAP + dirY * startAlong))
-            .append(" C ")
-            .append(format(node.x - perpX * SELF_LOOP_HALF_WIDTH + dirX * controlAlong)).append(' ')
-            .append(format(node.y - perpY * SELF_LOOP_HALF_WIDTH + dirY * controlAlong)).append(", ")
-            .append(format(node.x + perpX * SELF_LOOP_HALF_WIDTH + dirX * controlAlong)).append(' ')
-            .append(format(node.y + perpY * SELF_LOOP_HALF_WIDTH + dirY * controlAlong)).append(", ")
-            .append(format(node.x + perpX * SELF_LOOP_HALF_GAP + dirX * startAlong)).append(' ')
-            .append(format(node.y + perpY * SELF_LOOP_HALF_GAP + dirY * startAlong)).append('"');
-        if (arrow) {
-            svg.append(" marker-end=\"url(#arrow)\"");
-        }
-        svg.append("/>");
+        canvas.edgeCubic(
+            node.x - perpX * SELF_LOOP_HALF_GAP + dirX * startAlong,
+            node.y - perpY * SELF_LOOP_HALF_GAP + dirY * startAlong,
+            node.x - perpX * SELF_LOOP_HALF_WIDTH + dirX * controlAlong,
+            node.y - perpY * SELF_LOOP_HALF_WIDTH + dirY * controlAlong,
+            node.x + perpX * SELF_LOOP_HALF_WIDTH + dirX * controlAlong,
+            node.y + perpY * SELF_LOOP_HALF_WIDTH + dirY * controlAlong,
+            node.x + perpX * SELF_LOOP_HALF_GAP + dirX * startAlong,
+            node.y + perpY * SELF_LOOP_HALF_GAP + dirY * startAlong,
+            arrow);
     }
 
-    private void appendLinkLabel(StringBuilder svg, Link link, double dx, double dy, double distance, double offset) {
+    private void appendLinkLabel(DfmCanvas canvas, Link link, double dx, double dy, double distance, double offset) {
         double halfWidth = link.label().length() * 7 / 2;
         double unitX = dx / distance;
         double unitY = dy / distance;
@@ -392,8 +382,7 @@ public class DfmVisualizationService {
         double bend = offset * 4 * fraction * (1 - fraction);
         x -= unitY * bend;
         y += unitX * bend;
-        svg.append("<text class=\"edge-label\" text-anchor=\"middle\" x=\"").append(format(x))
-            .append("\" y=\"").append(format(y + 4)).append("\">").append(escape(link.label())).append("</text>");
+        canvas.text(x, y + 4, link.label(), DfmCanvas.TextStyle.EDGE_LABEL);
     }
 
     private double borderDistance(Node node, double unitX, double unitY) {
@@ -420,87 +409,46 @@ public class DfmVisualizationService {
         return Math.min(horizontal, vertical);
     }
 
-    private void appendLine(StringBuilder svg, double sourceX, double sourceY,
-                            double targetX, double targetY, boolean arrow) {
-        svg.append("<line class=\"edge\" x1=\"").append(format(sourceX))
-            .append("\" y1=\"").append(format(sourceY)).append("\" x2=\"")
-            .append(format(targetX)).append("\" y2=\"").append(format(targetY)).append("\"");
-        if (arrow) {
-            svg.append(" marker-end=\"url(#arrow)\"");
-        }
-        svg.append("/>");
-    }
-
-    private void appendNode(StringBuilder svg, Node node) {
+    private void appendNode(DfmCanvas canvas, Node node) {
         if (node.type() == NodeType.FACT) {
             double factHeight = factHeight(node);
-            svg.append("<rect x=\"").append(format(node.x - FACT_WIDTH / 2)).append("\" y=\"")
-                .append(format(node.y - factHeight / 2)).append("\" width=\"").append(FACT_WIDTH)
-                .append("\" height=\"").append(format(factHeight)).append("\" rx=\"10\" ry=\"10\" fill=\"white\" stroke=\"blue\"/>")
-                .append("<text class=\"fact-title\" text-anchor=\"middle\" x=\"").append(format(node.x))
-                .append("\" y=\"").append(format(node.y - (10 + node.measures.size() * 20) / 2)).append("\">")
-                .append(escape(node.name)).append("</text>")
-                .append("<line x1=\"").append(format(node.x - FACT_WIDTH / 2)).append("\" y1=\"")
-                .append(format(node.y - (50 + node.measures.size() * 20) / 2 + 30)).append("\" x2=\"")
-                .append(format(node.x + FACT_WIDTH / 2)).append("\" y2=\"")
-                .append(format(node.y - (50 + node.measures.size() * 20) / 2 + 30)).append("\" stroke=\"blue\"/>");
+            canvas.factBox(node.x - FACT_WIDTH / 2, node.y - factHeight / 2, FACT_WIDTH, factHeight);
+            canvas.text(node.x, node.y - (10 + node.measures.size() * 20) / 2, node.name,
+                DfmCanvas.TextStyle.FACT_TITLE);
+            double ruleY = node.y - (50 + node.measures.size() * 20) / 2 + 30;
+            canvas.rule(node.x - FACT_WIDTH / 2, ruleY, node.x + FACT_WIDTH / 2, ruleY, DfmCanvas.RuleColor.BLUE);
             int detailIndex = 0;
             for (var measure : node.measures) {
-                appendFactDetail(svg, node, measure, detailIndex++);
+                canvas.text(node.x - FACT_WIDTH / 2 + 12, node.y - factHeight / 2 + 40 + detailIndex++ * 20,
+                    measure, DfmCanvas.TextStyle.FACT_DETAIL);
             }
             return;
         }
         if (node.type() == NodeType.DESCRIPTIVE) {
-            svg.append("<rect x=\"").append(format(node.x - DESCRIPTIVE_WIDTH / 2)).append("\" y=\"")
-                .append(format(node.y - DESCRIPTIVE_HEIGHT / 2)).append("\" width=\"")
-                .append(DESCRIPTIVE_WIDTH).append("\" height=\"").append(DESCRIPTIVE_HEIGHT)
-                .append("\" fill=\"white\" stroke=\"none\"/>")
-                .append("<text class=\"descriptive\" text-anchor=\"middle\" x=\"").append(format(node.x))
-                .append("\" y=\"").append(format(node.y)).append("\">").append(escape(node.name)).append("</text>")
-                .append("<line x1=\"").append(format(node.x - DESCRIPTIVE_WIDTH / 2)).append("\" y1=\"")
-                .append(format(node.y + DESCRIPTIVE_HEIGHT / 2)).append("\" x2=\"")
-                .append(format(node.x + DESCRIPTIVE_WIDTH / 2)).append("\" y2=\"")
-                .append(format(node.y + DESCRIPTIVE_HEIGHT / 2)).append("\" stroke=\"black\"/>");
+            canvas.descriptiveBox(node.x - DESCRIPTIVE_WIDTH / 2, node.y - DESCRIPTIVE_HEIGHT / 2,
+                DESCRIPTIVE_WIDTH, DESCRIPTIVE_HEIGHT);
+            canvas.text(node.x, node.y, node.name, DfmCanvas.TextStyle.DESCRIPTIVE);
+            canvas.rule(node.x - DESCRIPTIVE_WIDTH / 2, node.y + DESCRIPTIVE_HEIGHT / 2,
+                node.x + DESCRIPTIVE_WIDTH / 2, node.y + DESCRIPTIVE_HEIGHT / 2, DfmCanvas.RuleColor.BLACK);
             return;
         }
-        svg.append("<circle cx=\"").append(format(node.x)).append("\" cy=\"").append(format(node.y))
-            .append("\" r=\"").append(LEVEL_RADIUS).append("\" fill=\"white\" stroke=\"blue\"/>");
+        canvas.circle(node.x, node.y, LEVEL_RADIUS, true);
         if (node.type() == NodeType.SHARED) {
-            svg.append("<circle cx=\"").append(format(node.x)).append("\" cy=\"").append(format(node.y))
-                .append("\" r=\"").append(LEVEL_RADIUS + SHARED_RING_GAP).append("\" fill=\"none\" stroke=\"blue\"/>");
+            canvas.circle(node.x, node.y, LEVEL_RADIUS + SHARED_RING_GAP, false);
         } else if (node.type() == NodeType.CROSS) {
             double arcRadius = LEVEL_RADIUS + SHARED_RING_GAP;
-            svg.append("<path d=\"M ").append(format(node.x - arcRadius)).append(' ').append(format(node.y - 4))
-                .append(" A ").append(format(arcRadius)).append(' ').append(format(arcRadius))
-                .append(" 0 0 1 ").append(format(node.x - 4)).append(' ').append(format(node.y - arcRadius))
-                .append("\" fill=\"none\" stroke=\"blue\"/>");
+            double start = Math.toDegrees(Math.atan2(4, -arcRadius));
+            double end = Math.toDegrees(Math.atan2(arcRadius, -4));
+            canvas.arc(node.x, node.y, arcRadius, start, end - start);
         }
-        svg.append("<text text-anchor=\"middle\" x=\"").append(format(node.x)).append("\" y=\"")
-            .append(format(node.y + 20)).append("\">").append(escape(node.name)).append("</text>");
+        canvas.text(node.x, node.y + 20, node.name, DfmCanvas.TextStyle.LEVEL_NAME);
         if (node.optional()) {
-            svg.append("<line x1=\"").append(format(node.x - 15)).append("\" y1=\"")
-                .append(format(node.y)).append("\" x2=\"").append(format(node.x + 15))
-                .append("\" y2=\"").append(format(node.y)).append("\" stroke=\"black\"/>");
+            canvas.rule(node.x - 15, node.y, node.x + 15, node.y, DfmCanvas.RuleColor.BLACK);
         }
     }
 
     private double factHeight(Node node) {
         return FACT_BASE_HEIGHT + node.measures.size() * 20;
-    }
-
-    private void appendFactDetail(StringBuilder svg, Node node, String detail, int index) {
-        svg.append("<text class=\"fact-detail\" x=\"").append(format(node.x - FACT_WIDTH / 2 + 12))
-            .append("\" y=\"").append(format(node.y - factHeight(node) / 2 + 40 + index * 20)).append("\">")
-            .append(escape(detail)).append("</text>");
-    }
-
-    private String format(double value) {
-        return String.format(java.util.Locale.ROOT, "%.1f", value);
-    }
-
-    private String escape(String value) {
-        return value.replace("&", "&amp;").replace("<", "&lt;")
-            .replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;");
     }
 
     private enum NodeType {
