@@ -102,6 +102,7 @@ Sales - product;
 - `{shared} h` and `{cross} h` refer to the declaration `hierarchy h`, which is required; it may appear before or after the reference. The reference must be the last level of its chain and cannot be optional (use `(-)` for the connection to it). Connections to it can have a description, as in `customer -[customerCity]- {shared} city`.
 - References are allowed in dimensions and in other hierarchy declarations. A hierarchy must not refer to itself, directly or through other hierarchies.
 - A hierarchy is either shared or cross-dimensional: it cannot be referenced with both markers.
+- A referenced hierarchy must be the target of at least two connections, because a shared hierarchy or cross-dimensional attribute joins several branches. The connections are counted like the edges of the graph: one per connection from a fact to a dimension that starts with the reference (several roles such as `Invoice -[shipping]- Customer; Invoice -[billing]- Customer;` count separately), and one per distinct connection from a level to the reference, in dimensions and in other hierarchy declarations. A hierarchy with a single connection is rejected. `DfmParser.parseFragment` skips this check for parts of a model, e.g. evaluation criteria.
 - Hierarchy names are unique among the hierarchy declarations. They are independent of dimension and level names, so `hierarchy city` and `dimension city` can coexist.
 - A declared hierarchy that is never referenced is still part of the model.
 

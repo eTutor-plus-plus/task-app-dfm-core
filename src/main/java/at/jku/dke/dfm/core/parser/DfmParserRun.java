@@ -11,22 +11,29 @@ import at.jku.dke.dfm.core.models.enums.ConnectionType;
 import at.jku.dke.dfm.core.models.enums.LevelType;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * A single parse run holding the mutable token state. Instances must not be shared or reused.
  */
 final class DfmParserRun {
+    private static final int MIN_CONNECTIONS = 2;
+
     private final List<Token> tokens;
+    private final boolean complete;
     private final List<HierarchyReference> references = new ArrayList<>();
     private int position;
 
-    DfmParserRun(String source) {
+    DfmParserRun(String source, boolean complete) {
         this.tokens = tokenize(source);
+        this.complete = complete;
     }
 
     List<AbstractElement> parse() {
@@ -73,6 +80,7 @@ final class DfmParserRun {
             fact.getDimensions().add(dimension.withFactConnection(connection));
         }
         dimensions.removeIf(owners::containsKey);
+        checkIncomingConnections(facts, dimensions, definitions);
 
         var result = new ArrayList<AbstractElement>(facts);
         result.addAll(dimensions);
@@ -101,6 +109,71 @@ final class DfmParserRun {
         var state = new HashMap<String, Boolean>();
         for (var definition : definitions) {
             checkForCycle(definition.getName(), state);
+        }
+    }
+
+    // A shared hierarchy or cross-dimensional attribute is the target of several connections. They are counted like
+    // the edges of the graph: one per distinct connection from a fact and one per distinct connection of a level.
+    // A fragment may contain only some of them.
+    private void checkIncomingConnections(List<FactElement> facts, List<DimensionElement> unconnected,
+                                          List<HierarchyDefinitionElement> definitions) {
+        if (!complete) {
+            return;
+        }
+        var incoming = new HashMap<String, Set<List<String>>>();
+        var ids = new IdentityHashMap<Object, Integer>();
+        var scanned = Collections.newSetFromMap(new IdentityHashMap<DimensionElement, Boolean>());
+        for (var fact : facts) {
+            for (var dimension : fact.getDimensions()) {
+                var chains = dimension.getHierarchies();
+                var head = chains.isEmpty() ? null : chains.get(0).getHead();
+                if (head != null && head.getLevelType().isReference()) {
+                    incoming.computeIfAbsent(head.getName(), name -> new HashSet<>()).add(List.of(
+                        String.valueOf(id(ids, fact)), String.valueOf(dimension.getFactConnectionType()),
+                        String.valueOf(dimension.isFactConnectionOptional()),
+                        String.valueOf(dimension.getFactConnectionLabel())));
+                }
+                if (scanned.add(dimension.getDefinition())) {
+                    collectLevelConnections(id(ids, dimension.getDefinition()), dimension.getHierarchies(), incoming);
+                }
+            }
+        }
+        unconnected.forEach(dimension ->
+            collectLevelConnections(id(ids, dimension), dimension.getHierarchies(), incoming));
+        definitions.forEach(definition ->
+            collectLevelConnections(id(ids, definition), definition.getHierarchies(), incoming));
+
+        var checked = new HashSet<String>();
+        for (var reference : references) {
+            if (!checked.add(reference.name())) {
+                continue;
+            }
+            int count = incoming.getOrDefault(reference.name(), Set.of()).size();
+            if (count < MIN_CONNECTIONS) {
+                throw new DfmParseException("Hierarchy " + reference.name() + " is the target of "
+                    + (count == 0 ? "no connection" : "only one connection") + "; a {" + marker(reference.type())
+                    + "} hierarchy needs at least " + MIN_CONNECTIONS + " incoming connections.",
+                    reference.token().line, reference.token().column);
+            }
+        }
+    }
+
+    private int id(Map<Object, Integer> ids, Object element) {
+        return ids.computeIfAbsent(element, key -> ids.size());
+    }
+
+    private void collectLevelConnections(int container, List<Hierarchy> chains,
+                                         Map<String, Set<List<String>>> incoming) {
+        for (var chain : chains) {
+            for (Level level = chain.getHead(); level != null && level.getNextLevel() != null;
+                 level = level.getNextLevel()) {
+                var next = level.getNextLevel();
+                if (next.getLevelType().isReference()) {
+                    incoming.computeIfAbsent(next.getName(), name -> new HashSet<>()).add(List.of(
+                        String.valueOf(container), level.getName(), String.valueOf(level.getConnectionType()),
+                        String.valueOf(level.isConnectionOptional()), String.valueOf(level.getConnectionLabel())));
+                }
+            }
         }
     }
 

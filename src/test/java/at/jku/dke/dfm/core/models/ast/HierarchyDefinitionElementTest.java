@@ -23,8 +23,8 @@ class HierarchyDefinitionElementTest {
         assertFalse(definition.structurallyEquals(parse("hierarchy g { a - b; };")));
         assertFalse(definition.structurallyEquals(parse("hierarchy h { a = b; };")));
         assertFalse(definition.structurallyEquals(parse("hierarchy h { a - b; a - c; };")));
-        assertFalse(parse("hierarchy v { a - {cross} w; }; hierarchy w { b; };")
-            .structurallyEquals(parse("hierarchy v { a - {shared} w; }; hierarchy w { b; };")));
+        assertFalse(parse("hierarchy v { a - {cross} w; a - c - {cross} w; }; hierarchy w { b; };")
+            .structurallyEquals(parse("hierarchy v { a - {shared} w; a - c - {shared} w; }; hierarchy w { b; };")));
     }
 
     @Test

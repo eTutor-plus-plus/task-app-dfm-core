@@ -13,9 +13,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class DfmVisualizationServiceTest {
     @Test
     void rendersSharedHierarchyEntryAsDoubleCircle() {
-        var svg = render("hierarchy h { a - b; }; dimension d { x - {shared} h; };");
+        var svg = render("hierarchy h { a - b; }; dimension d { x - {shared} h; y - {shared} h; };");
 
-        assertEquals(4, svg.split("<circle", -1).length - 1);
+        assertEquals(5,  svg.split("<circle", -1).length - 1);
         assertTrue(svg.contains("r=\"14.0\""));
         assertFalse(svg.contains(" A 14.0 14.0 "));
         assertTrue(svg.contains(">a</text>"));
@@ -23,9 +23,9 @@ class DfmVisualizationServiceTest {
 
     @Test
     void rendersCrossAttributeAsCircleWithArc() {
-        var svg = render("hierarchy h { a; }; dimension d { x - {cross} h; };");
+        var svg = render("hierarchy h { a; }; dimension d { x - {cross} h; y - {cross} h; };");
 
-        assertEquals(2, svg.split("<circle", -1).length - 1);
+        assertEquals(3,  svg.split("<circle", -1).length - 1);
         assertEquals(1, svg.split(" A 14.0 14.0 ", -1).length - 1);
     }
 
@@ -34,7 +34,8 @@ class DfmVisualizationServiceTest {
         var svg = render("fact Sales { profit; }; hierarchy VAT { VAT - vatClass; };"
             + " hierarchy city { city - country - {cross} VAT; city = region; };"
             + " dimension city { {shared} city; }; dimension product { product - category - {cross} VAT; };"
-            + " Sales -[storeCity]- city; Sales - product;");
+            + " dimension customer { customer -[customerCity]- {shared} city; };"
+            + " Sales -[storeCity]- city; Sales - customer; Sales - product;");
 
         assertTrue(svg.endsWith("</svg>"));
         assertTrue(svg.contains(">VAT</text>"));

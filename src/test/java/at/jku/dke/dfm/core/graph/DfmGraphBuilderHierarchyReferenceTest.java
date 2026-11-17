@@ -106,15 +106,15 @@ class DfmGraphBuilderHierarchyReferenceTest {
 
     @Test
     void sameLevelNameInDimensionAndHierarchyStaysSeparate() {
-        var graph = build("hierarchy h { a - b; }; dimension d { b - {shared} h; };");
+        var graph = build("hierarchy h { a - b; }; dimension d { b - {shared} h; c - {shared} h; };");
 
-        assertEquals(List.of("b", "a", "b"), graph.nodes().stream().map(GraphNode::label).toList());
-        assertEquals(2, graph.edges().size());
+        assertEquals(List.of("b", "c", "a", "b"), graph.nodes().stream().map(GraphNode::label).toList());
+        assertEquals(3, graph.edges().size());
     }
 
     @Test
     void keepsLabelsAndOptionalMarkerOfTheConnectionToTheReference() {
-        var graph = build("hierarchy h { a; }; dimension d { x (-[role]-) {shared} h; };");
+        var graph = build("hierarchy h { a; }; dimension d { x (-[role]-) {shared} h; y - {shared} h; };");
 
         var edge = edge(graph, "x", "a");
         assertEquals("role", edge.label());
@@ -131,8 +131,8 @@ class DfmGraphBuilderHierarchyReferenceTest {
 
     @Test
     void nestedReferencesEndAtTheEntryOfTheReferencedHierarchy() {
-        var graph = build("hierarchy outer { o - {cross} inner; }; hierarchy inner { i - j; };"
-            + " dimension d { x - {shared} outer; };");
+        var graph = build("hierarchy outer { o - {cross} inner; o - p - {cross} inner; }; hierarchy inner { i - j; };"
+            + " dimension d { x - {shared} outer; y - {shared} outer; };");
 
         assertNotNull(edge(graph, "x", "o"));
         assertNotNull(edge(graph, "o", "i"));

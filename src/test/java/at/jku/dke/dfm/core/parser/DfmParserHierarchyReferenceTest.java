@@ -70,7 +70,7 @@ class DfmParserHierarchyReferenceTest {
 
     @Test
     void allowsReferencesBeforeTheDeclaration() {
-        var elements = new DfmParser().parse("dimension d { x - {shared} h; }; hierarchy h { a - b; };");
+        var elements = new DfmParser().parse("dimension d { x - {shared} h; y - {shared} h; }; hierarchy h { a - b; };");
 
         assertEquals(2, elements.size());
         assertTrue(elements.get(1) instanceof HierarchyDefinitionElement);
@@ -78,7 +78,7 @@ class DfmParserHierarchyReferenceTest {
 
     @Test
     void markersAreCaseInsensitive() {
-        var elements = new DfmParser().parse("hierarchy h { a; }; dimension d { x - {SHARED} h; };");
+        var elements = new DfmParser().parse("hierarchy h { a; }; dimension d { x - {SHARED} h; y - {shared} h; };");
 
         var dimension = (DimensionElement) elements.get(0);
         assertEquals(LevelType.SHARED, dimension.getHierarchies().get(0).getHead().getNextLevel().getLevelType());
@@ -86,7 +86,7 @@ class DfmParserHierarchyReferenceTest {
 
     @Test
     void allowsOptionalConnectionToReference() {
-        var elements = new DfmParser().parse("hierarchy h { a; }; dimension d { x (-) {shared} h; };");
+        var elements = new DfmParser().parse("hierarchy h { a; }; dimension d { x (-) {shared} h; y - {shared} h; };");
 
         var head = ((DimensionElement) elements.get(0)).getHierarchies().get(0).getHead();
         assertTrue(head.isConnectionOptional());
@@ -105,7 +105,13 @@ class DfmParserHierarchyReferenceTest {
         "hierarchy a { b; }; hierarchy h { {shared} a; };|{shared} a|must start with a level of its own",
         "hierarchy h { };|};|at least one chain",
         "hierarchy h { ; };|; };|Expected a chain",
-        "hierarchy h { a; }; dimension d { x - ({shared} h); };|({shared}|cannot be optional"
+        "hierarchy h { a; }; dimension d { x - ({shared} h); };|({shared}|cannot be optional",
+        "hierarchy h { a; }; dimension d { x - {shared} h; };|h; };|only one connection",
+        "hierarchy h { a; }; dimension d { x - {cross} h; };|h; };|only one connection",
+        "hierarchy h { a; }; dimension d { x - {shared} h; }; dimension e { y; };|h; };|only one connection",
+        "hierarchy h { a; }; dimension d { {shared} h; };|h; };|no connection",
+        "fact F { m; }; hierarchy h { a; }; dimension d { {shared} h; }; F - d;|h; };|only one connection",
+        "fact F { m; }; hierarchy h { a; }; dimension d { {shared} h; }; F - d; F - d;|h; };|only one connection"
     })
     void rejectsInvalidHierarchyReferences(String source, String at, String message) {
         var exception = assertThrows(DfmParseException.class, () -> new DfmParser().parse(source));
@@ -113,6 +119,87 @@ class DfmParserHierarchyReferenceTest {
         assertTrue(exception.getMessage().contains(message), exception.getMessage());
         assertEquals(1, exception.getLine());
         assertEquals(source.lastIndexOf(at) + 1, exception.getColumn(), exception.getMessage());
+    }
+
+    @Test
+    void fragmentsMayHaveASingleIncomingConnection() {
+        var parser = new DfmParser();
+        var source = "hierarchy h { a; }; dimension d { x - {shared} h; };";
+
+        assertEquals(2, parser.parseFragment(source).size());
+        assertThrows(DfmParseException.class, () -> parser.parse(source));
+    }
+
+    @Test
+    void fragmentsStillRequireDeclaredHierarchies() {
+        var exception = assertThrows(DfmParseException.class,
+            () -> new DfmParser().parseFragment("dimension d { x - {shared} h; };"));
+
+        assertTrue(exception.getMessage().contains("is not declared"), exception.getMessage());
+    }
+
+    @Test
+    void countsConnectionsFromDeclarationsAndDimensions() {
+        var elements = new DfmParser().parse(
+            "hierarchy h { a; }; hierarchy g { x - {cross} h; }; dimension d { y - {cross} h; };");
+
+        assertEquals(3, elements.size());
+    }
+
+    @Test
+    void acceptsOneReferenceWithSeveralRolesFromTheFact() {
+        var elements = new DfmParser().parse("""
+            fact Invoice { quantity; };
+            hierarchy Customer { Customer - City; };
+            dimension Customer { {shared} Customer; };
+            Invoice -[shipping]- Customer;
+            Invoice -[billing]- Customer;
+            """);
+
+        assertEquals(2, elements.size());
+    }
+
+    @Test
+    void acceptsDimensionsOfSeveralFactsReferencingTheSameHierarchy() {
+        var elements = new DfmParser().parse("""
+            fact F { m; }; fact G { n; };
+            hierarchy h { a; };
+            dimension d { {shared} h; };
+            dimension e { {shared} h; };
+            F - d; G - e;
+            """);
+
+        assertEquals(3, elements.size());
+    }
+
+    @Test
+    void countsIdenticalConnectionsFromTheSameLevelOnce() {
+        var source = "hierarchy h { a; }; dimension d { x - {shared} h; x - {shared} h; };";
+
+        var exception = assertThrows(DfmParseException.class, () -> new DfmParser().parse(source));
+
+        assertTrue(exception.getMessage().contains("only one connection"), exception.getMessage());
+    }
+
+    @Test
+    void doesNotCountAReferenceOutsideTheFirstChainOfAConnectedDimension() {
+        var source = "fact F { m; }; hierarchy h { a; }; dimension d { x; {shared} h; }; F - d;";
+
+        var exception = assertThrows(DfmParseException.class, () -> new DfmParser().parse(source));
+
+        assertTrue(exception.getMessage().contains("no connection"), exception.getMessage());
+    }
+
+    @Test
+    void reportsPositionOfSingleConnectionInMultilineSource() {
+        var source = "hierarchy h { a; };\ndimension d {\n  x - {shared} h;\n};";
+
+        var exception = assertThrows(DfmParseException.class, () -> new DfmParser().parse(source));
+
+        assertTrue(exception.getMessage().contains("{shared} hierarchy needs at least 2 incoming connections"),
+            exception.getMessage());
+        assertEquals(3, exception.getLine());
+        assertEquals(16, exception.getColumn());
     }
 
     @Test

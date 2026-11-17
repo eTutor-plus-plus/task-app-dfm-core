@@ -371,7 +371,7 @@ class DfmParserTest {
         "dimension D { a (-[supervisor]->) a; };",
         "dimension D { a (=[role]=) b; };",
         "dimension D { a =[role]= A; };",
-        "hierarchy a { a; }; dimension D { a =[role]= {shared} a; };",
+        "hierarchy a { a; }; dimension D { a =[role]= {shared} a; }; dimension E { b - {shared} a; };",
         "fact A { m; }; dimension A { a; }; A = A;"
     })
     void acceptsOptionalRecursionAndMultipleNonrecursiveConnections(String source) {
